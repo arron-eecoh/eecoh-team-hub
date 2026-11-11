@@ -51,7 +51,62 @@
   function start(session) {
     person = personOf(session);
     try { const k = "eecoh-hub-v3"; const o = JSON.parse(localStorage.getItem(k) || "{}") || {}; o.me = person; localStorage.setItem(k, JSON.stringify(o)); } catch (e) {}
+    addAccountButton();
     readyResolve();
+  }
+
+  /* ---------- account: change your own password; Arron and Lucia can reset anyone's ---------- */
+  const ADMINS = ["Arron", "Lucia"];
+  function addAccountButton() {
+    if (document.getElementById("acctBtn")) return;
+    const out = document.querySelector('button[onclick="HUB_SIGNOUT()"]');
+    if (!out) return;
+    const b = document.createElement("button");
+    b.id = "acctBtn"; b.type = "button"; b.className = "btn sm"; b.textContent = "Account";
+    b.onclick = openAccount;
+    out.parentNode.insertBefore(b, out);
+  }
+  function openAccount() {
+    const root = document.getElementById("modalRoot") || document.body;
+    const admin = ADMINS.includes(person);
+    root.innerHTML = '<div class="scrim" data-acclose></div><div class="modal" role="dialog" aria-modal="true" aria-labelledby="acT">' +
+      '<h2 id="acT">Your account</h2><p class="small muted" style="margin:4px 0 12px">Signed in as ' + esc(person === "Florencia" ? "Flor" : person) + '.</p>' +
+      '<form id="acPw" class="fgrid"><div class="sec" style="margin:0">Change your password</div>' +
+      '<label class="f">New password<input id="acN1" type="password" autocomplete="new-password" minlength="8" required></label>' +
+      '<label class="f">Type it again<input id="acN2" type="password" autocomplete="new-password" minlength="8" required></label>' +
+      '<p id="acMsg" class="small" style="margin:0"></p><button class="btn pri" type="submit">Save new password</button></form>' +
+      (admin ? '<form id="acReset" class="fgrid" style="margin-top:18px;padding-top:14px;border-top:1px solid var(--line)"><div class="sec" style="margin:0">Reset a teammate\'s password</div>' +
+        '<p class="small muted" style="margin:0">For someone who is locked out. Give them the new password, and they can change it from Account once they\'re in.</p>' +
+        '<label class="f">Person<select id="acWho">' + PEOPLE.filter(p => p.name !== person).map(p => '<option value="' + p.email + '">' + esc(p.label) + "</option>").join("") + "</select></label>" +
+        '<label class="f">New password for them<input id="acRP" type="text" autocomplete="off" minlength="8" required></label>' +
+        '<p id="acRMsg" class="small" style="margin:0"></p><button class="btn" type="submit">Reset password</button></form>' : "") +
+      '<div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" type="button" data-acclose>Close</button></div></div>';
+    const close = () => { root.innerHTML = ""; };
+    root.querySelectorAll("[data-acclose]").forEach(x => x.onclick = close);
+    const say = (id, txt, bad) => { const m = document.getElementById(id); m.textContent = txt; m.style.color = bad ? "var(--bad)" : "var(--ok)"; };
+    document.getElementById("acPw").onsubmit = async e => {
+      e.preventDefault();
+      const a = document.getElementById("acN1").value, b2 = document.getElementById("acN2").value;
+      if (a.length < 8) return say("acMsg", "Use at least 8 characters.", true);
+      if (a !== b2) return say("acMsg", "The two passwords don't match.", true);
+      const { error } = await sb.auth.updateUser({ password: a });
+      if (error) return say("acMsg", error.message.includes("different") ? "That's already your password. Pick a new one." : "Couldn't save: " + error.message, true);
+      e.target.reset(); say("acMsg", "Saved. Use your new password next time you sign in.");
+    };
+    const rf = document.getElementById("acReset");
+    if (rf) rf.onsubmit = async e => {
+      e.preventDefault();
+      const email = document.getElementById("acWho").value, pw = document.getElementById("acRP").value;
+      const who = (PEOPLE.find(p => p.email === email) || {}).label || email;
+      if (pw.length < 8) return say("acRMsg", "Use at least 8 characters.", true);
+      const { data: s } = await sb.auth.getSession();
+      try {
+        const r = await fetch(SB_URL + "/functions/v1/admin-reset", { method: "POST", headers: { "Content-Type": "application/json", apikey: SB_KEY, Authorization: "Bearer " + (s && s.session ? s.session.access_token : "") }, body: JSON.stringify({ email, password: pw }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) return say("acRMsg", j.error || "Couldn't reset it.", true);
+        say("acRMsg", "Done. " + who + " can now sign in with: " + pw);
+      } catch (err) { say("acRMsg", "Couldn't reach the server. Check your connection.", true); }
+    };
   }
   window.HUB_SIGNOUT = async () => { try { await sb.auth.signOut(); } catch (e) {} try { const k = "eecoh-hub-v3"; const o = JSON.parse(localStorage.getItem(k) || "{}") || {}; delete o.me; localStorage.setItem(k, JSON.stringify(o)); } catch (e) {} location.reload(); };
   const boot = async () => {
