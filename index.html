@@ -448,6 +448,18 @@ label.f textarea { min-height: 70px; resize: vertical; }
 .fbcard .txt { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
 .fbcard .resolve { margin-top: 8px; }
 .drawer { padding-bottom: 64px; }
+/* running timer strip + dashboards */
+.timerbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 7px 0 9px; font-size: 13px; border-top: 1px solid var(--line); }
+.timerbar .tdot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); animation: tpulse 1.6s infinite; }
+@keyframes tpulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .timerbar .tdot { animation: none; } }
+.timerbar b { font-family: var(--mono); }
+.heat td, .heat th { text-align: center; padding: 6px 4px; font: 500 12px var(--mono); border-bottom: 1px solid var(--line); min-width: 38px; }
+.heat th:first-child, .heat td:first-child { text-align: left; font-family: var(--body); position: sticky; left: 0; background: var(--surface); min-width: 90px; padding-left: 12px; }
+.heat td.h1 { background: var(--accent-soft); } .heat td.h2 { background: var(--ok-s); color: var(--ok); } .heat td.h3 { background: var(--warn-s); color: var(--warn); } .heat td.we { background: var(--surface2); }
+.dbar { display: grid; grid-template-columns: minmax(0, 1fr) 70px; gap: 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.dbar:last-child { border-bottom: 0; } .dbar .meter { margin-top: 4px; } .dbar b { text-align: right; font-family: var(--mono); }
+tr.gone td { text-decoration: line-through; color: var(--muted); }
 .brand h1 { white-space: nowrap; }
 @media (max-width: 560px) { .brand { flex-basis: 100%; } .bar1 .viewer { margin-left: auto; } .colbtn .lbl { display: none; } }
 </style>
@@ -461,6 +473,7 @@ label.f textarea { min-height: 70px; resize: vertical; }
       <span class="viewer"><span id="meName"></span><select id="meSel" hidden><option>Arron</option><option>Lucia</option><option value="Florencia">Flor</option><option>Luciana</option><option>Jo</option></select><button class="btn sm" type="button" onclick="HUB_SIGNOUT()">Sign out</button></span>
     </div>
     <nav class="tabs" id="tabs" role="tablist" aria-label="Views"></nav>
+    <div class="timerbar" id="timerBar" hidden></div>
   </div>
 </header>
 <main id="view"><div class="panel empty">Loading the team's tasks…</div></main>
@@ -502,7 +515,7 @@ const S = { tasks: {}, ideas: {}, flags: {}, people: {}, dates: {}, comments: {}
   f: { owner: "All", client: "All", group: "All", q: "", hideDone: true },
   list: { status: "open", due: "", sort: "end", sel: new Set() },
   sched: "gantt", dayW: 46, collapsed: {}, cal: null, calSel: null, calHidden: {}, calTasks: true,
-  hoursMonth: null, hoursPerson: "All", undo: null, autoBackup: false, backupState: "idle", backupMsg: "", restorePreview: null, openRebalance: null, peers: [], room: null, requests: {}, milestones: {}, feedback: {}, fbf: "new", gby: "group", calMs: true, colors: {}, colorBy: "person", crit: false };
+  hoursMonth: null, hoursPerson: "All", undo: null, autoBackup: false, backupState: "idle", backupMsg: "", restorePreview: null, openRebalance: null, peers: [], room: null, requests: {}, milestones: {}, feedback: {}, fbf: "new", dash: "hours", dashP: "week", gby: "group", calMs: true, colors: {}, colorBy: "person", crit: false };
 const local = (() => { try { return JSON.parse(localStorage.getItem(LKEY) || "{}") || {}; } catch (e) { return {}; } })();
 if (local.me) S.me = local.me;
 if (local.autoBackup) S.autoBackup = true;
@@ -1324,7 +1337,7 @@ function composer(target, placeholder) {
 const VIEWS = [
   { id: "today", name: "Today" }, { id: "schedule", name: "Schedule" }, { id: "load", name: "Team load" },
   { id: "board", name: "Board" }, { id: "list", name: "All tasks" }, { id: "messages", name: "Messages" }, { id: "approvals", name: "Approvals" },
-  { id: "flags", name: "Flags" }, { id: "ideas", name: "Ideas" }, { id: "hours", name: "Hours" }, { id: "feedback", name: "Feedback" }, { id: "backup", name: "History & backup" }
+  { id: "flags", name: "Flags" }, { id: "ideas", name: "Ideas" }, { id: "hours", name: "Hours" }, { id: "dash", name: "Dashboards", owner: true }, { id: "feedback", name: "Feedback" }, { id: "backup", name: "History & backup" }
 ];
 
 function vToday() {
@@ -1669,50 +1682,123 @@ function vIdeas() {
 
 /* --- hours --- */
 const hm = mins => { const m = Math.round(+mins || 0); return Math.floor(m / 60) + ":" + pad2(m % 60); };
+/* Time is logged as real working windows (a start and an end), the same way the team's trackers work. A timer is the easy path;
+   typing a window in afterwards is allowed but labelled. Nothing is ever pre-filled from the planned hours. */
+const toMin = s => { const [h, m] = String(s || "0:0").split(":").map(Number); return (h || 0) * 60 + (m || 0); };
+const fromMin = m => pad2(Math.floor(m / 60) % 24) + ":" + pad2(m % 60);
+const nowHM = () => { const d = new Date(); return pad2(d.getHours()) + ":" + pad2(d.getMinutes()); };
+const liveEntries = () => Object.values(S.time).filter(e => !e.running && !e.deleted);
+const runningTimer = () => Object.values(S.time).find(e => e.running && e.by === S.me);
+const loggedOn = taskId => liveEntries().filter(e => e.taskId === taskId).reduce((s, e) => s + (+e.minutes || 0), 0);
+const elapsedMin = e => Math.max(0, Math.round((Date.now() - new Date(e.startedAt).getTime()) / 60000));
+function timeClash(en, skipId) { const a = toMin(en.start), b = a + en.minutes; return liveEntries().find(e => e.id !== skipId && e.person === en.person && e.date === en.date && toMin(e.start) < b && a < toMin(e.start) + (+e.minutes || 0)); }
+function entryProblem(en, skipId) {
+  if (!en.start || !en.finish) return "Add the time you started and the time you stopped.";
+  if (en.minutes <= 0) return "The end time has to be after the start time. For work past midnight, log two entries.";
+  if (en.date > REAL_TODAY || (en.date === REAL_TODAY && toMin(en.finish) > toMin(nowHM()) + 2)) return "That time hasn't happened yet.";
+  if (en.minutes > 600) return "That's over 10 hours in one go. Log the real working windows instead.";
+  const c = timeClash(en, skipId); if (c) return "That overlaps \"" + c.task + "\" (" + c.start + " to " + c.finish + "), already logged that day.";
+  return "";
+}
 function timeForm(pref) {
   pref = pref || {};
-  const now = new Date(), st = pref.start || pad2(Math.max(0, now.getHours() - 1)) + ":" + pad2(Math.floor(now.getMinutes() / 5) * 5);
   const persons = S.isOwner ? TEAM : [...new Set((TEAM.includes(S.me) ? [S.me] : []).concat(pref.person && TEAM.includes(pref.person) ? [pref.person] : []))];
   if (!persons.length) persons.push(...TEAM);
-  return '<label class="f" for="hTask">What you worked on<input id="hTask" required value="' + esc(pref.task || "") + '" placeholder="e.g. Emails to clients"></label>' +
-    '<div class="f3"><label class="f" for="hPerson">Who<select id="hPerson">' + opts(persons, pref.person || (TEAM.includes(S.me) ? S.me : persons[0])) + '</select></label><label class="f" for="hDate">Date<input id="hDate" type="date" value="' + esc(pref.date || REAL_TODAY) + '"></label><label class="f" for="hStart">Start time<input id="hStart" type="time" value="' + esc(st) + '"></label></div>' +
-    '<div class="f3"><label class="f" for="hHours">Hours spent<input id="hHours" type="number" step="0.25" min="0.05" value="' + esc(pref.hours || 1) + '"></label><label class="f" for="hClient">Client<select id="hClient">' + clientOpts(pref.client || "BM-26-000").replace('<option value="">No client</option>', "") + '</select></label><label class="f" for="hType">Work type<select id="hType">' + opts(WORK_TYPES, pref.type || "Build") + "</select></label></div>" +
+  const req = pref.optional ? "" : " required";
+  return '<label class="f" for="hTask">What you worked on<input id="hTask"' + req + ' value="' + esc(pref.task || "") + '" placeholder="e.g. Emails to clients"></label>' +
+    '<div class="f3"><label class="f" for="hDate">Date<input id="hDate" type="date" max="' + REAL_TODAY + '" value="' + esc(pref.date || REAL_TODAY) + '"></label><label class="f" for="hStart">Started at<input id="hStart" type="time"' + req + ' value="' + esc(pref.start || "") + '"></label><label class="f" for="hEnd">Stopped at<input id="hEnd" type="time"' + req + ' value="' + esc(pref.end || "") + '"></label></div>' +
+    '<div class="f3"><label class="f" for="hPerson">Who<select id="hPerson">' + opts(persons, pref.person || (TEAM.includes(S.me) ? S.me : persons[0])) + '</select></label><label class="f" for="hClient">Client<select id="hClient">' + clientOpts(pref.client || "BM-26-000").replace('<option value="">No client</option>', "") + '</select></label><label class="f" for="hType">Work type<select id="hType">' + opts(WORK_TYPES, pref.type || "Build") + "</select></label></div>" +
     '<div class="f2"><label class="f" for="hRec">One-off or recurring<select id="hRec">' + opts(["One-off", "Recurring"], pref.rec || "One-off") + '</select></label><label class="f" for="hNotes">Notes<input id="hNotes" value="' + esc(pref.notes || "") + '"></label></div>';
 }
 function readTimeForm(extra) {
   const g = k => document.getElementById(k).value;
-  const hours = Math.max(0.05, +g("hHours") || 0), mins = Math.round(hours * 60), [sh, sm] = (g("hStart") || "09:00").split(":").map(Number);
-  const endM = sh * 60 + sm + mins;
-  return Object.assign({ person: g("hPerson"), task: g("hTask").trim(), date: g("hDate") || REAL_TODAY, start: pad2(sh) + ":" + pad2(sm), finish: pad2(Math.floor(endM / 60) % 24) + ":" + pad2(endM % 60), minutes: mins, client: g("hClient"), workType: g("hType"), recurring: g("hRec"), notes: g("hNotes").trim(), synced: false, createdAt: new Date().toISOString(), by: S.me }, extra || {});
+  const start = g("hStart"), finish = g("hEnd"), mins = start && finish ? toMin(finish) - toMin(start) : 0;
+  return Object.assign({ person: g("hPerson"), task: g("hTask").trim(), date: g("hDate") || REAL_TODAY, start, finish, minutes: mins, client: g("hClient"), workType: g("hType"), recurring: g("hRec"), notes: g("hNotes").trim(), synced: false, method: "manual", createdAt: new Date().toISOString(), by: S.me }, extra || {});
 }
 async function saveTime(entry) {
   if (!S.uid) { toast("Sign in to log hours."); return false; }
+  const bad = entryProblem(entry); if (bad) { toast(bad); return false; }
   const eid = uid("h"), path = "time/" + S.uid + "/entries/" + eid;
   try { await put("time/" + S.uid, { person: S.me, updatedAt: nowStamp() }); } catch (e) {}
-  return commit([{ path, before: null, after: entry }], "Logged " + hm(entry.minutes) + " h for " + entry.person + ": " + entry.task, { noLog: true });
+  return commit([{ path, before: null, after: entry }], "Logged " + hm(entry.minutes) + " h for " + entry.person + ": " + entry.task, { noLog: true, skipGate: true });
 }
+/* --- timer --- */
+function timerBtn(t) {
+  if (!TEAM.includes(S.me) || isDone(t)) return "";
+  const r = runningTimer();
+  return r && r.taskId === t.id ? '<button class="btn sm pri" type="button" data-timerstop>Stop timer</button>' : '<button class="btn sm pri" type="button" data-timerstart="' + t.id + '">▶ Start timer</button>';
+}
+async function startTimer(taskId, label) {
+  if (!TEAM.includes(S.me)) { toast("Timers are for Lucia, Luciana and Flor."); return; }
+  if (runningTimer()) { toast("Stop your current timer first."); return; }
+  const t = taskId && task(taskId), what = t ? t.item : (label || "").trim();
+  if (!what) { toast("Say what you're working on first."); return; }
+  const eid = uid("h"), d = new Date();
+  try { await put("time/" + S.uid, { person: S.me, updatedAt: nowStamp() }); } catch (e) {}
+  await commit([{ path: "time/" + S.uid + "/entries/" + eid, before: null, after: { person: S.me, by: S.me, task: what, taskId: t ? t.id : "", date: iso(d), start: nowHM(), finish: "", minutes: 0, client: (t && t.client) || "BM-26-000", workType: "Build", recurring: "One-off", notes: "", running: true, synced: "running", method: "timer", source: t ? "task" : "manual", startedAt: d.toISOString(), createdAt: d.toISOString() } }], "Timer started: " + what, { noLog: true, noUndo: true, skipGate: true });
+  if (t && t.status === "Not started") saveTask(t.id, { status: "Working on it" }, "Started: " + t.item, { noUndo: true, toast: false });
+  if (S.drawer === taskId) openTask(taskId);
+}
+function renderTimer() {
+  const bar = document.getElementById("timerBar"), r = runningTimer(); if (!bar) return;
+  bar.hidden = !r; if (!r) { bar.innerHTML = ""; return; }
+  bar.innerHTML = '<span class="tdot" aria-hidden="true"></span><span>Timer running since ' + esc(r.start) + (r.date !== REAL_TODAY ? " (" + fmt(r.date) + ")" : "") + ": <b>" + hm(elapsedMin(r)) + "</b> on " + esc(r.task.length > 50 ? r.task.slice(0, 48) + "…" : r.task) + '</span><button class="btn sm pri" type="button" data-timerstop>Stop and log</button>';
+}
+setInterval(() => { if (runningTimer()) renderTimer(); }, 30000);
+function openStopTimer() {
+  const r = runningTimer(); if (!r) return;
+  const sameDay = r.date === iso(new Date()), t = r.taskId && task(r.taskId);
+  document.getElementById("modalRoot").innerHTML = '<div class="scrim" data-mclose style="z-index:21"></div><div class="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle"><h2 id="mTitle">Stop timer</h2><p class="small muted" style="margin:0 0 12px">Started ' + esc(r.start) + (sameDay ? "" : " on " + fmt(r.date, true)) + ". " + (sameDay ? "Running for " + hm(elapsedMin(r)) + "." : "It ran past midnight, so enter when you really stopped that day.") + '</p><form class="fgrid" id="stopForm">' +
+    '<label class="f" for="sTask">What you worked on<input id="sTask" required value="' + esc(r.task) + '"></label>' +
+    '<div class="f3"><label class="f" for="sEnd">Stopped at<input id="sEnd" type="time" required value="' + (sameDay ? nowHM() : "") + '"></label><label class="f" for="sBreak">Breaks (minutes)<input id="sBreak" type="number" min="0" step="1" value="0"></label><label class="f" for="sType">Work type<select id="sType">' + opts(WORK_TYPES, r.workType || "Build") + "</select></label></div>" +
+    '<div class="f2"><label class="f" for="sClient">Client<select id="sClient">' + clientOpts(r.client || "BM-26-000").replace('<option value="">No client</option>', "") + '</select></label><label class="f" for="sRec">One-off or recurring<select id="sRec">' + opts(["One-off", "Recurring"], r.recurring || "One-off") + "</select></label></div>" +
+    '<label class="f" for="sNotes">Notes<input id="sNotes" value="' + esc(r.notes || "") + '"></label>' +
+    (t && !isDone(t) ? '<label class="row small"><input type="checkbox" id="sDone"> This task is finished, close it</label>' : "") +
+    '<p id="sMsg" class="small" style="margin:0;color:var(--bad)"></p>' +
+    '<div class="row"><button class="btn pri" type="submit">Save time</button><button class="btn danger" type="button" data-timerdiscard>' + (S.confirmTdel ? "Click again to discard" : "Discard timer") + '</button><button class="btn ghost" type="button" data-mclose>Keep running</button></div></form></div>';
+  document.getElementById("stopForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const g = k => document.getElementById(k).value, end = g("sEnd"), brk = Math.max(0, Math.round(+g("sBreak") || 0));
+    const span = toMin(end) - toMin(r.start), mins = span - brk, auto = sameDay && Math.abs(toMin(end) - toMin(nowHM())) <= 2;
+    const en = Object.assign({}, r, { task: g("sTask").trim() || r.task, finish: end, minutes: mins, breakMin: brk, workType: g("sType"), client: g("sClient"), recurring: g("sRec"), notes: g("sNotes").trim(), running: false, synced: false, method: auto ? "timer" : "timer-fixed", stoppedAt: new Date().toISOString() });
+    delete en.id; delete en._path;
+    let bad = span <= 0 ? "The stop time has to be after " + r.start + "." : mins <= 0 ? "Breaks can't be longer than the time worked." : (sameDay && toMin(end) > toMin(nowHM()) + 2) ? "That time hasn't happened yet." : "";
+    if (!bad) { const c = timeClash(en, r.id); if (c) bad = "That overlaps \"" + c.task + "\" (" + c.start + " to " + c.finish + ")."; }
+    if (bad) { document.getElementById("sMsg").textContent = bad; return; }
+    const done = (document.getElementById("sDone") || {}).checked;
+    closeModal();
+    const b = clone(r); delete b.id; delete b._path;
+    const ok = await commit([{ path: r._path, before: b, after: en }], "Logged " + hm(mins) + " h: " + en.task, { noLog: true, noUndo: true, skipGate: true });
+    if (ok && done && t) await commit([changeTask(t.id, { status: "Done" })], "Closed: " + t.item, { noUndo: true, toast: false });
+    if (S.drawer && S.drawer !== "new") openTask(S.drawer);
+  });
+}
+const methodName = e => e.method === "timer" ? "Timer" : e.method === "timer-fixed" ? "Timer, end typed" : "Typed in";
 function vHours() {
   if (!S.hoursMonth) S.hoursMonth = REAL_TODAY.slice(0, 7);
   const [yy, mm] = S.hoursMonth.split("-").map(Number);
-  let list = Object.values(S.time).filter(e => (e.date || "").startsWith(S.hoursMonth));
+  let list = Object.values(S.time).filter(e => (e.date || "").startsWith(S.hoursMonth) && (S.isOwner || !e.deleted));
   if (!S.isOwner) list = list.filter(e => e.person === S.me);
   else if (S.hoursPerson !== "All") list = list.filter(e => e.person === S.hoursPerson);
   list.sort((a, b) => (b.date + b.start).localeCompare(a.date + a.start));
-  const total = list.reduce((s, e) => s + (+e.minutes || 0), 0);
-  const byP = {}, byC = {}; list.forEach(e => { byP[e.person] = (byP[e.person] || 0) + (+e.minutes || 0); byC[e.client] = (byC[e.client] || 0) + (+e.minutes || 0); });
-  const pending = list.filter(e => !e.synced).length;
-  return '<div class="vhead"><div><h2>Hours</h2><p>Closing a task logs its time here, and the hub copies each entry into the person\'s own time tracker. Add anything unplanned below. ' + (S.isOwner ? "You can see everyone's hours." : "Only you and Arron see your hours.") + "</p></div>" +
+  const counted = list.filter(e => !e.running && !e.deleted);
+  const total = counted.reduce((s, e) => s + (+e.minutes || 0), 0);
+  const byP = {}, byC = {}; counted.forEach(e => { byP[e.person] = (byP[e.person] || 0) + (+e.minutes || 0); byC[e.client] = (byC[e.client] || 0) + (+e.minutes || 0); });
+  const pending = counted.filter(e => !e.synced).length, run = runningTimer();
+  return '<div class="vhead"><div><h2>Hours</h2><p>Log your hours here instead of in your tracker sheet. Start a timer when you begin and stop it when you finish, or type in the window you worked. ' + (S.meta.sender && S.meta.sender.mode === "live" ? "The hub copies each entry into your tracker within the hour. " : "") + (S.isOwner ? "You can see everyone's hours." : "Only you and Arron see your hours.") + "</p></div>" +
     '<div class="row"><button class="btn" type="button" data-hmonth="-1" aria-label="Previous month">‹</button><b style="min-width:130px;text-align:center">' + MONTHS[mm - 1] + " " + yy + '</b><button class="btn" type="button" data-hmonth="1" aria-label="Next month">›</button>' +
     (S.isOwner ? '<select class="sel" id="hP" aria-label="Person">' + opts(["All"].concat(TEAM), S.hoursPerson) + "</select>" : "") + "</div></div>" +
     '<div class="kpis"><div class="panel kpi"><b class="num">' + hm(total) + "</b><span>Hours this month" + (S.isOwner && S.hoursPerson === "All" ? ", whole team" : "") + "</span></div>" +
     Object.keys(byP).filter(() => S.isOwner).map(p => '<div class="panel kpi"><b class="num">' + hm(byP[p]) + "</b><span>" + esc(p) + "</span></div>").join("") +
     '<div class="panel kpi"><b class="num">' + pending + "</b><span>Waiting to go to trackers</span></div></div>" +
-    '<div class="grid2"><div><div class="sec">Entries</div><div class="panel twrap"><table class="htable"><thead><tr><th>Date</th><th>Time</th><th>Who</th><th>What</th><th>Client</th><th>Type</th><th>Hours</th><th>Tracker</th><th></th></tr></thead><tbody>' +
-      (list.length ? list.map(e => '<tr><td class="num">' + fmt(e.date) + '</td><td class="num small">' + esc(e.start) + "–" + esc(e.finish) + "</td><td>" + esc(e.person) + "</td><td>" + esc(e.task) + (e.source === "task" ? ' <span class="pill">from task</span>' : "") + '</td><td class="small">' + esc(e.client) + '</td><td class="small">' + esc(e.workType) + '</td><td class="num">' + hm(e.minutes) + "</td><td>" + (e.synced ? '<span class="pill st-done">In tracker</span>' : '<span class="pill st-today">Queued</span>') + '</td><td><button class="btn sm ghost" type="button" data-hdel="' + esc(e.id) + '">' + (S.confirmHdel === e.id ? "Confirm" : "Delete") + "</button></td></tr>").join("") : '<tr><td colspan="9" class="empty">No hours logged this month yet.</td></tr>') +
+    '<div class="grid2"><div><div class="sec">Entries</div><div class="panel twrap"><table class="htable"><thead><tr><th>Date</th><th>Time</th><th>Who</th><th>What</th><th>Client</th><th>Type</th><th>Hours</th><th>How</th><th>Tracker</th><th></th></tr></thead><tbody>' +
+      (list.length ? list.map(e => '<tr' + (e.deleted ? ' class="gone"' : "") + '><td class="num">' + fmt(e.date) + '</td><td class="num small">' + esc(e.start) + "–" + esc(e.finish) + "</td><td>" + esc(e.person) + "</td><td>" + esc(e.task) + (e.source === "task" ? ' <span class="pill">from task</span>' : "") + '</td><td class="small">' + esc(e.client) + '</td><td class="small">' + esc(e.workType) + '</td><td class="num">' + (e.running ? hm(elapsedMin(e)) : hm(e.minutes)) + '</td><td class="small">' + methodName(e) + "</td><td>" + (e.deleted ? '<span class="pill">Removed</span>' : e.running ? '<span class="pill st-late">Running</span>' : e.synced ? '<span class="pill st-done">In tracker</span>' : '<span class="pill st-today">Queued</span>') + "</td><td>" + (e.deleted ? "" : e.running ? (e.by === S.me ? '<button class="btn sm" type="button" data-timerstop>Stop</button>' : "") : '<button class="btn sm ghost" type="button" data-hdel="' + esc(e.id) + '">' + (S.confirmHdel === e.id ? "Confirm" : "Remove") + "</button>") + "</td></tr>").join("") : '<tr><td colspan="10" class="empty">No hours logged this month yet.</td></tr>') +
     "</tbody></table></div>" +
     (Object.keys(byC).length ? '<div class="sec">By client</div><div class="panel">' + Object.keys(byC).sort((a, b) => byC[b] - byC[a]).map(c => '<div class="nrow read"><span></span><span>' + esc(clientName(c)) + ' <span class="cc">' + esc(c) + '</span></span><b class="num">' + hm(byC[c]) + "</b></div>").join("") + "</div>" : "") +
-    '</div><div><div class="sec">Log unplanned time</div><div class="panel pad"><form class="fgrid" id="hourForm">' + timeForm() + '<button class="btn pri" type="submit">Log time</button></form>' +
-    '<p class="small muted" style="margin:10px 0 0">Entries reach the trackers within the hour. If you delete an entry that is already in your tracker, delete that row there too.</p></div></div></div>';
+    '</div><div>' + (TEAM.includes(S.me) ? '<div class="sec">Timer</div><div class="panel pad">' + (run ? '<p style="margin:0 0 8px">Running since ' + esc(run.start) + ": <b>" + esc(run.task) + '</b></p><button class="btn pri" type="button" data-timerstop>Stop and log</button>'
+      : '<form class="qadd" id="timerForm"><input id="tWhat" placeholder="What are you starting on?" aria-label="What are you starting on?"><button class="btn pri" type="submit">▶ Start</button></form><p class="small muted" style="margin:8px 0 0">For a task on the schedule, open the task and press Start timer there.</p>') + "</div>" : "") +
+    '<div class="sec">Type in time you already worked</div><div class="panel pad"><form class="fgrid" id="hourForm">' + timeForm() + '<button class="btn pri" type="submit">Log time</button></form>' +
+    '<p class="small muted" style="margin:10px 0 0">Enter the real window you worked, like in your tracker. Two entries can\'t overlap, and time can\'t be logged ahead.</p></div></div></div>';
 }
 
 function vBackup() {
@@ -1745,7 +1831,7 @@ function openTask(id, preset) {
     '<h2 id="dTitle">' + (isNew ? "Add a " + (par ? "subtask" : "task") : esc(t.item)) + "</h2>" +
     (!isNew ? '<div class="row">' + ownerPill(t.owner) + statusPills(t) + "</div>" + '<div class="livebar" id="livebar" hidden></div>' +
       pendingFor(t.id).map(rq => '<div class="livebar" style="background:var(--warn-s);color:var(--warn)">Waiting for approval: ' + esc((rq.lines || []).join("; ")) + ' <button class="btn sm" type="button" data-view="approvals" data-close>Open</button></div>').join("") +
-      '<div class="dact"><button class="btn sm" type="button" data-tick="' + t.id + '">' + (isDone(t) ? "Reopen" : "Close task") + "</button>" +
+      '<div class="dact">' + timerBtn(t) + '<button class="btn sm" type="button" data-tick="' + t.id + '">' + (isDone(t) ? "Reopen" : "Close task") + "</button>" +
       (t.start ? '<button class="btn sm" type="button" data-shift="' + t.id + '" data-n="-1">−1 day</button><button class="btn sm" type="button" data-shift="' + t.id + '" data-n="1">+1 day</button>' : "") +
       (t.owner !== S.me && !isDone(t) && PEOPLE_ORDER.includes(t.owner) ? '<button class="btn sm" type="button" data-nudge="' + t.id + '">Nudge ' + esc(t.owner) + "</button>" : "") +
       (b && b.owner !== S.me ? '<button class="btn sm" type="button" data-nudge="' + b.id + '" data-waiting="' + t.id + '">Nudge ' + esc(b.owner) + " about the blocker</button>" : "") +
@@ -1807,22 +1893,25 @@ function closeTask(id) {
   const t = task(id); if (!t) return;
   const ks = kids(id).filter(k => !isDone(k));
   const person = TEAM.includes(t.owner) ? t.owner : (TEAM.includes(S.me) ? S.me : null);
-  if (!person || kids(id).length) {
+  if (!person || kids(id).length || !(S.isOwner || TEAM.includes(S.me))) {
     return commit([changeTask(id, { status: "Done" })].concat(ks.map(k => changeTask(k.id, { status: "Done" }))), "Closed: " + t.item, { details: ks.length ? "and " + ks.length + " open subtasks" : "" });
   }
-  const now = new Date(), mins = Math.round((+t.hrs || 1) * 60), st = new Date(now.getTime() - mins * 60000);
-  document.getElementById("modalRoot").innerHTML = '<div class="scrim" data-mclose style="z-index:21"></div><div class="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle"><h2 id="mTitle">Close task</h2><p class="small muted" style="margin:0 0 12px">' + esc(t.item) + '</p><form class="fgrid" id="closeForm">' +
-    timeForm({ task: t.item, person, hours: +t.hrs || 1, client: t.client || "BM-26-000", start: pad2(st.getHours()) + ":" + pad2(Math.floor(st.getMinutes() / 5) * 5), type: "Build" }) +
-    '<div class="row"><button class="btn pri" type="submit">Close and log time</button><button class="btn" type="button" data-closeonly="' + id + '">Close without time</button><button class="btn ghost" type="button" data-mclose>Cancel</button></div>' +
-    '<p class="small muted" style="margin:0">The time goes to ' + esc(person) + "'s tracker within the hour, so there's no need to log it twice.</p></form></div>";
+  const r = runningTimer();
+  if (r && r.taskId === id) { openStopTimer(); const cb = document.getElementById("sDone"); if (cb) cb.checked = true; return; }
+  const got = loggedOn(id);
+  document.getElementById("modalRoot").innerHTML = '<div class="scrim" data-mclose style="z-index:21"></div><div class="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle"><h2 id="mTitle">Close task</h2><p class="small muted" style="margin:0 0 12px">' + esc(t.item) + '</p>' +
+    '<div class="fbctx" style="margin-bottom:12px">' + (got ? "Time already logged on this task: <b>" + hm(got) + " h</b>." : "No time logged on this task yet.") + " If you worked on it and haven't logged it, add the window below.</div>" +
+    '<form class="fgrid" id="closeForm">' + timeForm({ task: t.item, person, client: t.client || "BM-26-000", type: "Build", optional: true }) +
+    '<p id="cMsg" class="small" style="margin:0;color:var(--bad)"></p>' +
+    '<div class="row"><button class="btn pri" type="submit">Close and log this time</button><button class="btn" type="button" data-closeonly="' + id + '">Close, no time to add</button><button class="btn ghost" type="button" data-mclose>Cancel</button></div></form></div>';
   document.getElementById("closeForm").addEventListener("submit", async e => {
     e.preventDefault();
-    const entry = readTimeForm({ taskId: id, source: "task" });
+    const entry = readTimeForm({ taskId: id, source: "task" }); if (!entry.task) entry.task = t.item;
+    const bad = entryProblem(entry); if (bad) { document.getElementById("cMsg").textContent = bad; return; }
     closeModal();
     const ok = await commit([changeTask(id, { status: "Done" })], "Closed: " + t.item, { noUndo: true, toast: false });
     if (ok) await saveTime(entry);
   });
-  setTimeout(() => { const el = document.getElementById("hHours"); if (el) el.focus(); }, 0);
 }
 function closeModal() { document.getElementById("modalRoot").innerHTML = ""; }
 
@@ -1958,6 +2047,66 @@ async function restoreGo() {
   await commit(ch, "Restored hub data from the backup Sheet", { details: rp.tasks.length + " tasks", noNotify: true, skipGate: true });
 }
 
+/* ===================== dashboards (Arron only; the database also refuses everyone else's time entries) ===================== */
+function dashRange() {
+  const t = pd(REAL_TODAY), d = n => { const x = new Date(t); x.setDate(x.getDate() + n); return x; }, dow = (t.getDay() + 6) % 7;
+  const k = S.dashP;
+  if (k === "lastweek") return { a: iso(d(-dow - 7)), b: iso(d(-dow - 1)), label: "Last week" };
+  if (k === "month") return { a: REAL_TODAY.slice(0, 8) + "01", b: REAL_TODAY, label: "This month" };
+  if (k === "lastmonth") { const e = new Date(t.getFullYear(), t.getMonth(), 0); return { a: iso(new Date(e.getFullYear(), e.getMonth(), 1)), b: iso(e), label: "Last month" }; }
+  return { a: iso(d(-dow)), b: REAL_TODAY, label: "This week" };
+}
+const lateDays = e => { if (!e.createdAt) return 0; return Math.round((pd(iso(new Date(e.createdAt))) - pd(e.date)) / 864e5); };
+function entryChecks(e) {
+  const out = [], t = e.taskId && task(e.taskId), typed = e.method !== "timer" && e.method !== "timer-fixed";
+  if (typed && t && +t.hrs && (+e.minutes || 0) >= 30 && Math.abs(e.minutes - t.hrs * 60) < 1) out.push("typed in, and exactly the planned " + fmtH(t.hrs) + " h");
+  if (lateDays(e) >= 2) out.push("logged " + lateDays(e) + " days after the work");
+  if ((+e.minutes || 0) > 300 && !e.breakMin) out.push("over 5 hours with no break");
+  if (e.method === "timer-fixed") out.push("timer left running, end time typed in");
+  return out;
+}
+function vDash() {
+  const R = dashRange(), all = Object.values(S.time).filter(e => TEAM.includes(e.person) && e.date >= R.a && e.date <= R.b);
+  const list = all.filter(e => !e.running && !e.deleted), gone = all.filter(e => e.deleted);
+  const total = list.reduce((s, e) => s + (+e.minutes || 0), 0), timerMin = list.filter(e => e.method === "timer").reduce((s, e) => s + (+e.minutes || 0), 0);
+  const days = []; for (let d = pd(R.a); iso(d) <= R.b; d.setDate(d.getDate() + 1)) days.push(iso(d));
+  const wdays = days.filter(isWork).length, per = {}; TEAM.forEach(p => { per[p] = { min: 0, days: new Set(), timer: 0, late: 0, checks: 0, byDay: {} }; });
+  const checks = [];
+  list.forEach(e => { const x = per[e.person]; x.min += +e.minutes || 0; x.days.add(e.date); if (e.method === "timer") x.timer += +e.minutes || 0; if (lateDays(e) >= 2) x.late++; x.byDay[e.date] = (x.byDay[e.date] || 0) + (+e.minutes || 0);
+    const c = entryChecks(e); if (c.length) { x.checks++; checks.push({ e, why: c.join("; ") }); } });
+  TEAM.forEach(p => { const c = cap(p); if (c) Object.keys(per[p].byDay).forEach(d => { if (per[p].byDay[d] > c * 60 * 1.5) { per[p].checks++; checks.push({ e: { person: p, date: d, task: "Whole day", minutes: per[p].byDay[d], start: "", finish: "" }, why: hm(per[p].byDay[d]) + " h in a day against " + fmtH(c) + " daily hours" }); } }); });
+  gone.forEach(e => checks.push({ e, why: "removed after logging" + (e.synced === true ? " (already in the tracker)" : "") }));
+  checks.sort((a, b) => (b.e.date + (b.e.start || "")).localeCompare(a.e.date + (a.e.start || "")));
+  const byC = {}, byT = {}; list.forEach(e => { byC[e.client] = (byC[e.client] || 0) + (+e.minutes || 0); byT[e.workType] = (byT[e.workType] || 0) + (+e.minutes || 0); });
+  const bars = (m, name) => Object.keys(m).sort((a, b) => m[b] - m[a]).map(k => '<div class="dbar"><div>' + esc(name(k)) + '<div class="meter"><i style="width:' + (total ? m[k] / total * 100 : 0) + '%;background:var(--accent)"></i></div></div><b>' + hm(m[k]) + "</b></div>").join("") || '<div class="empty">Nothing logged.</div>';
+  /* planned against logged, for tasks worked on in this period */
+  const ids = [...new Set(list.map(e => e.taskId).filter(id => id && task(id)))];
+  const pva = ids.map(id => { const t = task(id), got = loggedOn(id), plan = (+t.hrs || 0) * 60; return { t, got, plan, d: plan ? (got - plan) / plan : 0 }; }).sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 12);
+  /* repetition: the same kind of work logged again and again in the last 60 days */
+  const since = iso(new Date(Date.now() - 60 * 864e5)), groups = {};
+  liveEntries().filter(e => e.date >= since && TEAM.includes(e.person)).forEach(e => { const k = String(e.task || "").toLowerCase().replace(/\d+/g, "").replace(/[^a-zà-ÿ ]+/g, " ").replace(/\s+/g, " ").trim(); if (!k) return; const g = groups[k] = groups[k] || { name: e.task, n: 0, min: 0, who: new Set() }; g.n++; g.min += +e.minutes || 0; g.who.add(e.person); });
+  const reps = Object.values(groups).filter(g => g.n >= 3).sort((a, b) => b.min - a.min).slice(0, 10);
+  const showDays = days.length <= 31;
+  return '<div class="vhead"><div><h2>Dashboards</h2><p>Only you can open this tab, and the database refuses everyone else\'s time entries to anyone but you and the person who logged them.</p></div>' +
+    '<div class="row"><div class="seg" role="group" aria-label="Dashboard"><button type="button" aria-pressed="true">Team hours</button></div><div class="seg" role="group" aria-label="Period">' + [["week", "This week"], ["lastweek", "Last week"], ["month", "This month"], ["lastmonth", "Last month"]].map(([k, l]) => '<button type="button" data-dashp="' + k + '" aria-pressed="' + (S.dashP === k) + '">' + l + "</button>").join("") + "</div></div></div>" +
+    '<div class="kpis"><div class="panel kpi"><b class="num">' + hm(total) + "</b><span>Team hours, " + fmt(R.a) + " to " + fmt(R.b) + "</span></div>" +
+    TEAM.map(p => { const c = cap(p), capMin = (c || 0) * 60 * wdays, x = per[p]; return '<div class="panel kpi"><b class="num">' + hm(x.min) + "</b><span>" + esc(p === "Florencia" ? "Flor" : p) + (capMin ? ", " + Math.round(x.min / capMin * 100) + "% of " + fmtH(capMin / 60) + " h" : "") + '</span><div class="meter"><i style="width:' + (capMin ? Math.min(100, x.min / capMin * 100) : 0) + "%;background:" + "var(--p-" + PTOKEN[p] + ")" + '"></i></div></div>'; }).join("") +
+    '<div class="panel kpi"><b class="num">' + (total ? Math.round(timerMin / total * 100) : 0) + "%</b><span>Of hours came from a timer</span></div></div>" +
+    '<div class="sec">By person</div><div class="panel twrap"><table class="htable" style="min-width:560px"><thead><tr><th>Who</th><th>Hours</th><th>Days worked</th><th>Per day</th><th>From timer</th><th>Logged late</th><th>Worth a look</th></tr></thead><tbody>' +
+      TEAM.map(p => { const x = per[p]; return "<tr><td>" + ownerPill(p) + '</td><td class="num">' + hm(x.min) + '</td><td class="num">' + x.days.size + '</td><td class="num">' + (x.days.size ? hm(x.min / x.days.size) : "–") + '</td><td class="num">' + (x.min ? Math.round(x.timer / x.min * 100) + "%" : "–") + '</td><td class="num">' + x.late + '</td><td class="num">' + x.checks + "</td></tr>"; }).join("") + "</tbody></table></div>" +
+    (showDays ? '<div class="sec">Day by day</div><div class="panel twrap"><table class="heat" style="border-collapse:collapse;width:100%"><thead><tr><th></th>' + days.map(d => "<th>" + WD[pd(d).getDay()].slice(0, 2) + "<br>" + pd(d).getDate() + "</th>").join("") + "</tr></thead><tbody>" +
+      TEAM.map(p => { const c = (cap(p) || 0) * 60; return "<tr><td>" + esc(p === "Florencia" ? "Flor" : p) + "</td>" + days.map(d => { const m = per[p].byDay[d] || 0; return '<td class="' + (!m ? (isWork(d) ? "" : "we") : c && m > c * 1.5 ? "h3" : c && m >= c * .8 ? "h2" : "h1") + '">' + (m ? hm(m) : "") + "</td>"; }).join("") + "</tr>"; }).join("") + "</tbody></table></div>" : "") +
+    '<div class="grid2"><div>' +
+      '<div class="sec">Worth a look (' + checks.length + ')</div><div class="panel">' + (checks.length ? checks.slice(0, 25).map(c => '<div class="nrow read"><span></span><div style="min-width:0"><div class="small"><b>' + esc(c.e.person) + '</b> <span class="cc">' + fmt(c.e.date, true) + (c.e.start ? " · " + esc(c.e.start) + "–" + esc(c.e.finish || "") : "") + " · " + hm(c.e.minutes) + " h</span></div><div>" + esc(c.e.task) + '</div><div class="small muted">' + esc(c.why) + "</div></div><span></span></div>").join("") : '<div class="empty">Nothing stands out in this period.</div>') + "</div>" +
+      '<p class="small muted" style="margin:8px 2px">These are prompts for a conversation, not proof of anything. A typed-in entry that matches the plan to the minute may simply be a well-planned task.</p>' +
+      '<div class="sec">Planned against logged</div><div class="panel twrap"><table class="htable" style="min-width:420px"><thead><tr><th>Task</th><th>Who</th><th>Planned</th><th>Logged</th><th>Gap</th></tr></thead><tbody>' + (pva.length ? pva.map(x => '<tr><td><button class="tlink" type="button" data-task="' + x.t.id + '">' + esc(x.t.item) + "</button></td><td>" + esc(x.t.owner) + '</td><td class="num">' + fmtH(x.t.hrs) + '</td><td class="num">' + hm(x.got) + '</td><td class="num" style="color:' + (x.d > .25 ? "var(--bad)" : x.d < -.25 ? "var(--warn)" : "inherit") + '">' + (x.plan ? (x.d > 0 ? "+" : "") + Math.round(x.d * 100) + "%" : "–") + "</td></tr>").join("") : '<tr><td colspan="5" class="empty">No task time logged in this period.</td></tr>') + "</tbody></table></div>" +
+    "</div><div>" +
+      '<div class="sec">By client</div><div class="panel">' + bars(byC, clientName) + "</div>" +
+      '<div class="sec">By work type</div><div class="panel">' + bars(byT, k => k || "Not set") + "</div>" +
+      '<div class="sec">Repeated work, last 60 days</div><div class="panel">' + (reps.length ? reps.map(g => '<div class="nrow read"><span></span><div style="min-width:0"><div>' + esc(g.name) + '</div><div class="small muted">' + g.n + " times, about " + hm(g.min / g.n) + " each, by " + [...g.who].join(", ") + ". Worth a template, a checklist or an automation.</div></div><b class=\"num\">" + hm(g.min) + "</b></div>").join("") : '<div class="empty">Nothing has been logged three times or more yet. This fills in as the team logs hours.</div>') + "</div>" +
+    "</div></div>";
+}
+
 /* ===================== hub feedback: what works and what doesn't, from wherever you are ===================== */
 /* Anyone can send a note from any screen; the hub records where they were. Arron and Lucia review them and update the hub in batches. */
 const FB_KINDS = { dislike: "This gets in my way", idea: "Idea to add", like: "I like this", bug: "Something is broken" };
@@ -2062,7 +2211,7 @@ document.addEventListener("keydown", e => { if (e.key === "Escape" && document.g
 function renderTabs() {
   const late = tasks().filter(t => t.owner === S.me && state(t) === "late").length, un = unread().length;
   const allFlags = dedupe(autoFlags()).length + Object.values(S.flags).filter(f => f.status === "open").length;
-  document.getElementById("tabs").innerHTML = VIEWS.map(v => {
+  document.getElementById("tabs").innerHTML = VIEWS.filter(v => !v.owner || S.isOwner).map(v => {
     let b = "";
     if (v.id === "today" && late) b = '<span class="badge hot num">' + late + "</span>";
     if (v.id === "messages" && un) b = '<span class="badge hot num">' + un + "</span>";
@@ -2084,11 +2233,13 @@ function render() {
     return;
   }
   document.getElementById("fbBtn").hidden = false;
+  if (S.view === "dash" && !S.isOwner) S.view = "today";
+  renderTimer();
   const ae = document.activeElement, focusId = ae && ae.id, selStart = ae && ae.selectionStart;
   const draftVals = {}; document.querySelectorAll("#view textarea, #view input[type=text], #view input:not([type])").forEach(x => { if (x.id && x.value) draftVals[x.id] = x.value; });
   const gs = document.getElementById("gscroll"), sx = gs ? gs.scrollLeft : null, sy = gs ? gs.scrollTop : null;
   const cl = document.getElementById("chatlist"), atBottom = cl ? cl.scrollHeight - cl.scrollTop - cl.clientHeight < 40 : true;
-  el.innerHTML = S.view === "today" ? vToday() : S.view === "schedule" ? vSchedule() : S.view === "load" ? vLoad() : S.view === "board" ? vBoard() : S.view === "list" ? vList() : S.view === "messages" ? vMessages() : S.view === "flags" ? vFlags(lastFlagPref) : S.view === "ideas" ? vIdeas() : S.view === "hours" ? vHours() : S.view === "approvals" ? vApprovals() : S.view === "feedback" ? vFeedback() : vBackup();
+  el.innerHTML = S.view === "today" ? vToday() : S.view === "schedule" ? vSchedule() : S.view === "load" ? vLoad() : S.view === "board" ? vBoard() : S.view === "list" ? vList() : S.view === "messages" ? vMessages() : S.view === "flags" ? vFlags(lastFlagPref) : S.view === "ideas" ? vIdeas() : S.view === "hours" ? vHours() : S.view === "approvals" ? vApprovals() : S.view === "feedback" ? vFeedback() : S.view === "dash" ? vDash() : vBackup();
   Object.keys(draftVals).forEach(k => { const x = document.getElementById(k); if (x && !x.value) x.value = draftVals[k]; });
   const g = document.getElementById("gscroll");
   if (g) { if (sx != null && S.lastView === "schedule") { g.scrollLeft = sx; g.scrollTop = sy; } else { const ti = dayRange().indexOf(TODAY); if (ti > 2) g.scrollLeft = (ti - 2) * S.dayW; } }
@@ -2120,7 +2271,9 @@ function bindForms() {
     commit([{ path: "flags/" + id, before: null, after: stamp({ from: S.me, to, type: document.getElementById("fType").value, task: tk, msg, date: REAL_TODAY, status: "open" }) }], "Flag sent to " + to, { noUndo: true, notify: [{ to, type: "flag", taskId: tk, text: S.me + " flagged: " + msg }] });
   });
   const hf = document.getElementById("hourForm");
-  if (hf) hf.addEventListener("submit", async e => { e.preventDefault(); const en = readTimeForm({ source: "manual" }); if (!en.task) return; if (await saveTime(en)) { document.getElementById("hTask").value = ""; document.getElementById("hNotes").value = ""; } });
+  if (hf) hf.addEventListener("submit", async e => { e.preventDefault(); const en = readTimeForm({ source: "manual" }); if (!en.task) return; if (await saveTime(en)) { ["hTask", "hNotes", "hStart", "hEnd"].forEach(k => { document.getElementById(k).value = ""; }); } });
+  const tf = document.getElementById("timerForm");
+  if (tf) tf.addEventListener("submit", e => { e.preventDefault(); startTimer(null, document.getElementById("tWhat").value); });
   const nf = document.getElementById("needForm");
   if (nf) nf.addEventListener("submit", e => { e.preventDefault(); const v = document.getElementById("needIn").value.trim(); if (!v) return; const items = ((S.meta.needed && S.meta.needed.items) || []).concat(v); document.getElementById("needIn").value = ""; commit([{ path: "meta/needed", before: before(S.meta, "needed"), after: stamp({ items }) }], "Added a date we still need: " + v); });
 }
@@ -2234,7 +2387,11 @@ document.addEventListener("click", e => {
   if ((x = q("[data-idel]"))) { const id = x.dataset.idel; if (S.confirmIdel !== id) { S.confirmIdel = id; render(); return; } S.confirmIdel = null; const b = before(S.ideas, id); commit([{ path: "ideas/" + id, before: b, after: null }], "Deleted idea: " + b.title); return; }
   if ((x = q("[data-lsort]"))) { S.list.sort = x.dataset.lsort; render(); return; }
   if ((x = q("[data-hmonth]"))) { const [y, m] = S.hoursMonth.split("-").map(Number); const d = new Date(y, m - 1 + +x.dataset.hmonth, 1); S.hoursMonth = d.getFullYear() + "-" + pad2(d.getMonth() + 1); render(); return; }
-  if ((x = q("[data-hdel]"))) { const id = x.dataset.hdel; if (S.confirmHdel !== id) { S.confirmHdel = id; render(); return; } S.confirmHdel = null; const en = S.time[id]; commit([{ path: en._path, before: (() => { const b = clone(en); delete b.id; delete b._path; return b; })(), after: null }], "Deleted time entry: " + en.task, { noLog: true }); return; }
+  if ((x = q("[data-hdel]"))) { const id = x.dataset.hdel; if (S.confirmHdel !== id) { S.confirmHdel = id; render(); return; } S.confirmHdel = null; const en = S.time[id], b = clone(en); delete b.id; delete b._path; /* removed entries stay on record for Arron */ commit([{ path: en._path, before: b, after: Object.assign({}, b, { deleted: true, deletedAt: new Date().toISOString(), deletedBy: S.me, synced: b.synced === true ? true : "removed" }) }], "Removed time entry: " + en.task, { noLog: true, skipGate: true }); return; }
+  if ((x = q("[data-timerstart]"))) { startTimer(x.dataset.timerstart); return; }
+  if ((x = q("[data-timerstop]"))) { S.confirmTdel = false; openStopTimer(); return; }
+  if ((x = q("[data-timerdiscard]"))) { const r = runningTimer(); if (!r) return; if (!S.confirmTdel) { S.confirmTdel = true; x.textContent = "Click again to discard"; return; } S.confirmTdel = false; closeModal(); const b = clone(r); delete b.id; delete b._path; commit([{ path: r._path, before: b, after: null }], "Timer discarded", { noLog: true, noUndo: true, skipGate: true }); return; }
+  if ((x = q("[data-dashp]"))) { S.dashP = x.dataset.dashp; render(); return; }
   if ((x = q("[data-bulk]"))) {
     const ids = [...S.list.sel], kind = x.dataset.bulk;
     if (kind === "clear") { S.list.sel.clear(); S.confirmBulkDel = false; render(); return; }
@@ -2424,7 +2581,7 @@ fromHash(); renderTabs();
   const subTime = key => { if (timeSubs[key]) return; timeSubs[key] = db.collection("time/" + key + "/entries").onSnapshot(snap => {
     Object.keys(S.time).forEach(id => { if (S.time[id]._path && S.time[id]._path.startsWith("time/" + key + "/")) delete S.time[id]; });
     snap.docs.forEach(d => { S.time[d.id] = Object.assign({ id: d.id, _path: "time/" + key + "/entries/" + d.id }, d.data()); });
-    if (S.view === "hours") render();
+    if (S.view === "hours" || S.view === "dash") render(); else renderTimer();
   }, () => {}); };
   if (S.uid) subTime(S.uid);
   if (S.isOwner) db.collection("time").onSnapshot(snap => { snap.docs.forEach(d => subTime(d.id)); }, () => {});

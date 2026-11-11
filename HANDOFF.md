@@ -36,6 +36,13 @@ Five Supabase auth users: arron@, lucia@, florencia@, luciana@, joanna@ (all eec
 - Notes live in the `feedback` collection: kind (dislike, idea, like, bug), text, weight 1 to 3, by, at, status (new, planned, done, declined), votes ("me too"), where, panel, taskId, device, reply.
 - The Feedback tab lists them by area. Arron and Lucia set a status and an optional note back. "Copy batch for Claude" copies every Next batch note as a brief to paste into Claude Code. "Mark batch done" closes the batch and messages each author.
 
+## Hours and dashboards (added Nov 11, 2026)
+- The team logs hours in the hub instead of the tracker sheets. Entries live in `time/<Name>/entries`.
+- Two ways to log: a timer (started from a task or the Hours tab, one at a time, shown in a strip under the tabs) or a typed-in window with a start and end time. Nothing is pre-filled from planned hours. Entries cannot overlap, cannot be in the future, and cannot exceed 10 hours.
+- Each entry records `method` (timer, timer-fixed, manual), `createdAt`, and `breakMin`. A running timer has `running: true` and `synced: "running"`. Removing an entry keeps it with `deleted: true` (and `synced: "removed"` if it never reached a tracker), so Arron still sees it.
+- Privacy is enforced in the database, not only the screen: RLS on `public.docs` uses `hub_can(col)`, so rows under `time/<Name>/...` are readable and writable only by that person and Arron (migration `private_time_entries`). The sender uses the service role and is unaffected.
+- Dashboards tab (Arron only), first dashboard "Team hours": totals against capacity, day-by-day grid, share of hours from a timer, a "worth a look" list (typed in and exactly the planned hours, logged 2+ days late, 5+ hours with no break, timer end typed in, day far over daily hours, removed entries), planned against logged, by client, by work type, and repeated work in the last 60 days.
+
 ## Email sender
 - Old task "EECOH Team Hub sender" (trig_01BxjGzVNtWvAZRrNpDYxqaz) still runs against the old claude.ai hub. Leave it until switch day, because the team still works there.
 - New task "EECOH Team Hub sender (Supabase)" (trig_0117duC4BvTch5JhhUoMQymP), same schedule, reads and writes `public.docs`. It is PAUSED: it was created from Claude Code, which could not attach connectors. It needs Supabase, Gmail, Google Sheets and Zapier added in claude.ai (or recreate it there with the same prompt), then enable it.
