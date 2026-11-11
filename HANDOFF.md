@@ -31,19 +31,27 @@ Edge function `admin-reset` (verify_jwt off; it checks the caller's token itself
 ## Logins
 Five Supabase auth users: arron@, lucia@, florencia@, luciana@, joanna@ (all eecoh.ca). Initial passwords were given to Arron in chat. Users can change their own.
 
+## Hub feedback (added Nov 11, 2026)
+- A Feedback button sits at the bottom right of every screen, including on top of an open task or dialog. It records where the person was (view, open task or dialog, phone or computer) with their note.
+- Notes live in the `feedback` collection: kind (dislike, idea, like, bug), text, weight 1 to 3, by, at, status (new, planned, done, declined), votes ("me too"), where, panel, taskId, device, reply.
+- The Feedback tab lists them by area. Arron and Lucia set a status and an optional note back. "Copy batch for Claude" copies every Next batch note as a brief to paste into Claude Code. "Mark batch done" closes the batch and messages each author.
+
+## Email sender
+- Old task "EECOH Team Hub sender" (trig_01BxjGzVNtWvAZRrNpDYxqaz) still runs against the old claude.ai hub. Leave it until switch day, because the team still works there.
+- New task "EECOH Team Hub sender (Supabase)" (trig_0117duC4BvTch5JhhUoMQymP), same schedule, reads and writes `public.docs`. It is PAUSED: it was created from Claude Code, which could not attach connectors. It needs Supabase, Gmail, Google Sheets and Zapier added in claude.ai (or recreate it there with the same prompt), then enable it.
+- `meta/sender.mode` controls what it does. "trial" (current): only notification emails from the new hub, plus a morning line to Arron and Lucia about new feedback. "live": also the full digest, time trackers and Sheet backup.
+
 ## Status (Nov 11, 2026)
-- Done: schema, data import (69 tasks, 17 dates, people, meta, log), auth users, app, Account panel, Netlify site, repo.
-- Pending in the repo: replace `shim.js` with the version that has the Account panel, if that isn't pushed yet.
+- Done: schema, data import (69 tasks, 17 dates, people, meta, log), auth users, app, Account panel, Netlify site, repo, feedback feature, new sender prompt.
+- The imported copy is stale: 57 of 58 open tasks are past their due date. Re-copy or re-plan before the team sees it.
 
 ## Remaining steps before the team switches
 1. Arron signs in on the live app and checks the tasks load and the status shows Live.
-2. Re-copy data from the old hub on switch day. The team kept editing it after the first copy (e.g. task t10 changed). Read every collection with the ArtifactData tool (works from a claude.ai or Cowork chat), then upsert into `public.docs`.
-3. Rebuild the email sender. The scheduled task "EECOH Team Hub sender" (trig_01BxjGzVNtWvAZRrNpDYxqaz, weekdays 07:07 to 20:07 Toronto) still reads the old hub through ArtifactData. Scheduled tasks keep the connectors they were created with, and this one predates the Supabase connector. Delete it and create a new one with the same steps and schedule, with these changes:
-   - Read and write `public.docs` with Supabase `execute_sql` on project `dbehrnapvfopqyxucidz` instead of ArtifactData (no if_version; use `update ... set data = data || '{...}'::jsonb`).
-   - The hub link in emails becomes https://eecoh-team-hub.netlify.app.
-   - The sender now also covers the instant notification emails and the Sheet backup (Sheet 1NiEbr70Sfcf0jJgxNqbVQeXxYaF-hBTE78HTNt7NMm8) that the in-page code used to do.
-4. Welcome message to the team in English and Spanish: link, how to sign in, how to install on a phone, the Account button.
-5. Leave the old hub read-only for a week, then retire it.
+2. Add connectors to the new sender task and enable it (trial mode).
+3. Trial: team uses the new hub and sends feedback. Old hub stays the source of truth.
+4. Switch day: re-copy data from the old hub (read every collection with the ArtifactData tool from a claude.ai or Cowork chat, upsert into `public.docs`, keeping the `feedback` collection), set `meta/sender.mode` to "live", delete the old sender task, and repoint the `eecoh-team-hub` chat skill at Supabase.
+5. Welcome message to the team in English and Spanish: link, how to sign in, how to install on a phone, the Account and Feedback buttons.
+6. Leave the old hub read-only for a week, then retire it.
 
 ## Notes
 - The repo was public when last checked. Consider making it private. Netlify keeps deploying either way.

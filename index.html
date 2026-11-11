@@ -429,6 +429,27 @@ label.f textarea { min-height: 70px; resize: vertical; }
 .colbtn { display: inline-flex; align-items: center; gap: 6px; }
 .colbtn .dots { display: inline-flex; } .colbtn .dots i { width: 10px; height: 10px; border-radius: 50%; margin-left: -3px; border: 1.5px solid var(--surface); }
 @media (max-width: 640px) { .colbtn .lbl { display: none; } }
+
+/* hub feedback: a button on every screen, and a tab to review what the team sends */
+.fbbtn { position: fixed; right: max(14px, env(safe-area-inset-right, 0px)); bottom: calc(14px + env(safe-area-inset-bottom, 0px)); z-index: 25; display: inline-flex; align-items: center; gap: 7px; padding: 9px 14px; border-radius: 99px; border: 1px solid var(--accent); background: var(--surface); color: var(--accent); font-size: 13px; font-weight: 600; box-shadow: 0 6px 18px rgba(0,0,0,.16); }
+.fbbtn:hover { background: var(--accent-soft); }
+.fbbtn svg { width: 16px; height: 16px; flex: none; }
+@media (max-width: 600px) { .fbbtn .lbl { display: none; } .fbbtn { padding: 11px; } }
+#fbRoot .scrim { z-index: 26; } #fbRoot .modal { z-index: 27; }
+.fbkinds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; border: 0; padding: 0; margin: 0; }
+.fbkinds legend { font-size: 12.5px; font-weight: 500; color: var(--muted); padding: 0; margin-bottom: 4px; }
+.fbkinds label { position: relative; display: flex; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; font-size: 13.5px; font-weight: 500; cursor: pointer; background: var(--surface2); }
+.fbkinds input { position: absolute; opacity: 0; pointer-events: none; }
+.fbkinds label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.fbkinds label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fbctx { font-size: 12.5px; color: var(--muted); background: var(--surface2); border-radius: 8px; padding: 7px 10px; overflow-wrap: anywhere; }
+.fbcard { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.fbcard:last-child { border-bottom: 0; }
+.fbcard .txt { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
+.fbcard .resolve { margin-top: 8px; }
+.drawer { padding-bottom: 64px; }
+.brand h1 { white-space: nowrap; }
+@media (max-width: 560px) { .brand { flex-basis: 100%; } .bar1 .viewer { margin-left: auto; } .colbtn .lbl { display: none; } }
 </style>
 
 <header class="top">
@@ -446,6 +467,8 @@ label.f textarea { min-height: 70px; resize: vertical; }
 <div id="drawerRoot"></div>
 <div id="modalRoot"></div>
 <div id="toastRoot" aria-live="polite"></div>
+<div id="fbRoot"></div>
+<button class="fbbtn" id="fbBtn" type="button" data-fbopen hidden aria-label="Give feedback on the hub"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5h12v8H7l-3 2.5v-2.5H2z"/></svg><span class="lbl">Feedback</span></button>
 <script>
 /* ===================== constants ===================== */
 const HUB_URL = "https://eecoh-team-hub.netlify.app";
@@ -479,7 +502,7 @@ const S = { tasks: {}, ideas: {}, flags: {}, people: {}, dates: {}, comments: {}
   f: { owner: "All", client: "All", group: "All", q: "", hideDone: true },
   list: { status: "open", due: "", sort: "end", sel: new Set() },
   sched: "gantt", dayW: 46, collapsed: {}, cal: null, calSel: null, calHidden: {}, calTasks: true,
-  hoursMonth: null, hoursPerson: "All", undo: null, autoBackup: false, backupState: "idle", backupMsg: "", restorePreview: null, openRebalance: null, peers: [], room: null, requests: {}, milestones: {}, gby: "group", calMs: true, colors: {}, colorBy: "person", crit: false };
+  hoursMonth: null, hoursPerson: "All", undo: null, autoBackup: false, backupState: "idle", backupMsg: "", restorePreview: null, openRebalance: null, peers: [], room: null, requests: {}, milestones: {}, feedback: {}, fbf: "new", gby: "group", calMs: true, colors: {}, colorBy: "person", crit: false };
 const local = (() => { try { return JSON.parse(localStorage.getItem(LKEY) || "{}") || {}; } catch (e) { return {}; } })();
 if (local.me) S.me = local.me;
 if (local.autoBackup) S.autoBackup = true;
@@ -611,7 +634,7 @@ function put(path, data) {
   return queues[path];
 }
 function setSync(kind, text) { const el = document.getElementById("sync"); el.className = "sync " + kind; el.lastChild.textContent = text; }
-const MAPS = { tasks: "tasks", ideas: "ideas", flags: "flags", people: "people", dates: "dates", comments: "comments", notify: "notify", meta: "meta", requests: "requests", milestones: "milestones", colors: "colors" };
+const MAPS = { tasks: "tasks", ideas: "ideas", flags: "flags", people: "people", dates: "dates", comments: "comments", notify: "notify", meta: "meta", requests: "requests", milestones: "milestones", colors: "colors", feedback: "feedback" };
 function applyLocal(path, data) {
   const parts = path.split("/");
   if (parts[0] === "time" && parts.length === 4) { if (data === null) delete S.time[parts[3]]; else S.time[parts[3]] = Object.assign({ id: parts[3], _path: path }, data); return; }
@@ -672,7 +695,7 @@ async function commit(changes, label, o) {
     render();
     setSync("bad", "Not saved");
     if (e && e.code === "invalid_argument") { toast("You don't have edit access to this part of the hub."); }
-    else if (e && e.code === "quota_exceeded") toast("The hub's storage is full. Ask Claude to archive old log entries.");
+    else if (e && e.code === "quota_exceeded") toast("The hub's storage is full. Ask Arron to archive old log entries.");
     else toast("Couldn't save. Check your connection and try again.");
     return false;
   }
@@ -1301,7 +1324,7 @@ function composer(target, placeholder) {
 const VIEWS = [
   { id: "today", name: "Today" }, { id: "schedule", name: "Schedule" }, { id: "load", name: "Team load" },
   { id: "board", name: "Board" }, { id: "list", name: "All tasks" }, { id: "messages", name: "Messages" }, { id: "approvals", name: "Approvals" },
-  { id: "flags", name: "Flags" }, { id: "ideas", name: "Ideas" }, { id: "hours", name: "Hours" }, { id: "backup", name: "History & backup" }
+  { id: "flags", name: "Flags" }, { id: "ideas", name: "Ideas" }, { id: "hours", name: "Hours" }, { id: "feedback", name: "Feedback" }, { id: "backup", name: "History & backup" }
 ];
 
 function vToday() {
@@ -1323,7 +1346,7 @@ function vToday() {
       '<div class="panel kpi"><b class="num">' + un.length + "</b><span>Unread messages</span></div>" +
       '<div class="panel kpi"><b class="num">' + (c ? fmtH(hToday) + " / " + fmtH(c) + " h" : fmtH(hToday) + " h") + '</b><span>Your load today</span><div class="meter"><i style="width:' + pct + "%;background:" + color + '"></i></div></div>' +
     "</div>" +
-    (over ? '<div class="panel notice" style="margin-top:12px;border-left-color:var(--bad)"><b>Today holds more than your hours.</b> <span class="muted">Move something below, or let Lucia know.</span> <button class="btn sm" type="button" data-flagto="Lucia" data-flagtype="capacity">Flag to Lucia</button></div>' : "") +
+    (over ? '<div class="panel notice" style="margin-top:12px;border-left-color:var(--bad)"><b>Today holds more than your hours.</b> <span class="muted">Move something below, or let ' + (v === "Lucia" ? "Arron" : "Lucia") + ' know.</span> <button class="btn sm" type="button" data-flagto="' + (v === "Lucia" ? "Arron" : "Lucia") + '" data-flagtype="capacity">Flag to ' + (v === "Lucia" ? "Arron" : "Lucia") + '</button></div>' : "") +
     '<div class="grid2"><div>' +
       '<div class="sec">Overdue</div><div class="panel">' + (late.length ? late.map(t => trow(t)).join("") : '<div class="empty">Nothing overdue.</div>') + "</div>" +
       '<div class="sec">Due today</div><div class="panel">' + (today.length ? today.map(t => trow(t)).join("") : '<div class="empty">Nothing due today.</div>') + "</div>" +
@@ -1584,7 +1607,7 @@ function vList() {
 
 function nHTML(n) {
   const t = n.taskId && task(n.taskId);
-  const label = { assign: "New task", mention: "Mentioned you", nudge: "Nudge", flag: "Flag", comment: "Comment", approval: "Needs your review", decision: "Decision" }[n.type] || "Update";
+  const label = { assign: "New task", mention: "Mentioned you", nudge: "Nudge", flag: "Flag", comment: "Comment", approval: "Needs your review", decision: "Decision", feedback: "Hub feedback" }[n.type] || "Update";
   return '<div class="nrow' + (n.read ? " read" : "") + '"><span class="dot" aria-hidden="true"></span><div style="min-width:0"><div class="small"><b>' + esc(label) + '</b> <span class="cc">' + esc(fmtTime(n.at)) + " · from " + esc(n.from) + (n.emailed ? " · emailed" : "") + "</span></div><div>" + linkify(n.text) + "</div>" +
     (t ? '<button class="btn ghost sm" type="button" data-task="' + t.id + '" data-readn="' + n.id + '">Open task</button>' : "") + "</div>" +
     (!n.read ? '<button class="btn sm" type="button" data-readn="' + n.id + '">Mark read</button>' : "<span></span>") + "</div>";
@@ -1700,13 +1723,10 @@ function vBackup() {
     '<div class="grid2"><div><div class="sec" style="margin-top:0">Recent changes</div><div class="panel log">' +
       (S.log.length ? S.log.slice(0, 100).map(l => '<div class="lrow"><span class="num small muted">' + esc((l.at || "").replace("T", " ").slice(0, 16)) + '</span><span class="small"><b>' + esc(l.by) + '</b></span><span>' + esc(l.action) + (l.details ? ' <span class="muted small">· ' + esc(l.details) + "</span>" : "") + "</span></div>").join("") : '<div class="empty">No changes yet.</div>') +
     "</div></div><div>" + (lead ? "" : '<div class="panel pad"><h3 style="font-size:16px">Your work is saved live</h3><p class="small muted" style="margin:4px 0 0">Every change saves to the shared hub the moment you make it, and everyone sees the same up-to-date version. A full backup copy is also made automatically every hour. You don\'t need to do anything.</p></div>' + (S.meta.sender && S.meta.sender.lastRun ? '<p class="small muted" style="margin:10px 2px">Last automatic backup check ' + esc(fmtTime(S.meta.sender.lastRun)) + ".</p>" : "") + "</div></div>") + (!lead ? "" :
-    '<div class="panel pad"><h3 style="font-size:16px">Email and tracker sender</h3><p class="small muted" style="margin:4px 0 0">' + (sender && sender.lastRun ? "Last ran " + esc(fmtTime(sender.lastRun)) + (sender.note ? ". " + esc(sender.note) : "") : "Hasn't run yet. It runs every hour on weekdays and emails notifications, fills the time trackers and backs up the hub.") + "</p></div>" +
+    '<div class="panel pad"><h3 style="font-size:16px">Email and tracker sender</h3><p class="small muted" style="margin:4px 0 0">' + (sender && sender.lastRun ? "Last ran " + esc(fmtTime(sender.lastRun)) + (sender.note ? ". " + esc(sender.note) : "") + (sender.mode !== "live" ? " <b>Trial mode:</b> it only emails notifications from this hub. The morning digest, time trackers and Sheet backup start when the team switches over." : "") : "Hasn't run yet. It runs every hour on weekdays and emails notifications, fills the time trackers and backs up the hub.") + "</p></div>" +
     '<div class="panel pad" style="margin-top:12px"><h3 style="font-size:16px">Backup Sheet</h3><p class="small muted" style="margin:4px 0 10px">' + status + "</p>" +
-      '<div class="row"><button class="btn pri" type="button" data-backup' + (S.backupState === "running" ? " disabled" : "") + '>Back up now</button><a class="btn" href="' + SHEET_URL + '" target="_blank" rel="noopener">Open Sheet</a></div>' +
-      '<label class="row small" style="margin-top:12px"><input type="checkbox" id="autoB"' + (S.autoBackup ? " checked" : "") + "> Back up automatically after changes I make</label></div>" +
-    '<div class="panel pad" style="margin-top:12px"><h3 style="font-size:16px">Restore from the Sheet</h3><p class="small muted" style="margin:4px 0 10px">Replaces the hub\'s tasks, ideas, flags, key dates and team details with what is in the Sheet.</p>' +
-      (rp ? '<div class="sub small"><div>The Sheet has <b>' + rp.tasks.length + "</b> tasks, <b>" + rp.ideas.length + "</b> ideas, <b>" + rp.flags.length + "</b> flags, <b>" + rp.dates.length + "</b> key dates. The hub has " + tasks().length + " tasks now.</div><div class=\"row\"><button class=\"btn danger\" type=\"button\" data-restore-go>Replace hub data</button><button class=\"btn\" type=\"button\" data-restore-cancel>Cancel</button></div></div>"
-        : '<button class="btn" type="button" data-restore>Check the Sheet first</button>') +
+      '<div class="row"><a class="btn" href="' + SHEET_URL + '" target="_blank" rel="noopener">Open Sheet</a></div>' +
+      '<p class="small muted" style="margin:10px 0 0">The sender copies the whole hub to this Sheet every hour on weekdays, whenever something changed. To restore the hub from the Sheet, ask Claude.</p>' +
     "</div></div></div>");
 }
 
@@ -1938,6 +1958,106 @@ async function restoreGo() {
   await commit(ch, "Restored hub data from the backup Sheet", { details: rp.tasks.length + " tasks", noNotify: true, skipGate: true });
 }
 
+/* ===================== hub feedback: what works and what doesn't, from wherever you are ===================== */
+/* Anyone can send a note from any screen; the hub records where they were. Arron and Lucia review them and update the hub in batches. */
+const FB_KINDS = { dislike: "This gets in my way", idea: "Idea to add", like: "I like this", bug: "Something is broken" };
+const FB_KIND_CLS = { like: "st-done", dislike: "st-wait", idea: "st-prog", bug: "st-late" };
+const FB_STATUS = { "new": "New", planned: "Next batch", done: "Done", declined: "Not now" };
+const FB_WEIGHT = { 1: "Nice to have", 2: "Would help a lot", 3: "Slows my work down" };
+const isLead = () => LEADS.includes(S.me);
+const fbs = () => Object.values(S.feedback || {}).sort((a, b) => (b.at || "").localeCompare(a.at || ""));
+const fbStatus = f => FB_STATUS[f.status] ? f.status : "new";
+function fbContext() {
+  const t = S.drawer && S.drawer !== "new" ? task(S.drawer) : null, mh = document.querySelector("#modalRoot h2");
+  return { view: S.view, where: VIEW_NAME(S.view) + (S.view === "schedule" ? (S.sched === "gantt" ? " (timeline)" : " (calendar)") : ""),
+    panel: S.drawer === "new" ? "New task" : t ? "Task details" : mh ? mh.textContent.trim().slice(0, 60) : "", taskId: t ? t.id : "", taskItem: t ? t.item : "",
+    device: window.innerWidth < 700 ? "phone" : "computer", screen: window.innerWidth + "x" + window.innerHeight };
+}
+const fbWhere = c => (c.where || VIEW_NAME(c.view) || "the hub") + (c.panel ? " › " + c.panel : "") + (c.taskItem ? ": " + c.taskItem : "");
+function openFeedback() {
+  const c = fbContext(); S.fbCtx = c;
+  document.getElementById("fbRoot").innerHTML = '<div class="scrim" data-fbclose></div><div class="modal" role="dialog" aria-modal="true" aria-labelledby="fbT"><h2 id="fbT">Feedback on the hub</h2>' +
+    '<p class="small muted" style="margin:4px 0 12px">Tell us what works and what gets in your way. Arron and Lucia go through these together and update the hub in batches. English or Spanish, whichever is easier.</p>' +
+    '<form class="fgrid" id="fbForm"><div class="fbctx">About: <b>' + esc(fbWhere(c)) + "</b></div>" +
+    '<fieldset class="fbkinds"><legend>What kind of note is it?</legend>' + Object.keys(FB_KINDS).map((k, i) => '<label><input type="radio" name="fbKind" value="' + k + '"' + (i === 0 ? " checked" : "") + ">" + FB_KINDS[k] + "</label>").join("") + "</fieldset>" +
+    '<label class="f" for="fbText">Your note<textarea id="fbText" required maxlength="1500" style="min-height:96px" placeholder="What should change, or what do you like? One thing per note works best."></textarea></label>' +
+    '<label class="f" for="fbWeight">How much does it matter?<select id="fbWeight">' + Object.keys(FB_WEIGHT).map(k => '<option value="' + k + '">' + FB_WEIGHT[k] + "</option>").join("") + "</select></label>" +
+    '<div class="row"><button class="btn pri" type="submit">Send feedback</button><button class="btn ghost" type="button" data-fbclose>Cancel</button></div></form></div>';
+  document.getElementById("fbText").focus();
+}
+function closeFeedback() { document.getElementById("fbRoot").innerHTML = ""; }
+function fbSave(f, patch, label, o) { const d = Object.assign({}, f, patch); return commit([{ path: "feedback/" + f.id, before: before(S.feedback, f.id), after: stamp(d) }], label, Object.assign({ skipGate: true, noLog: true }, o || {})); }
+const fbShort = f => "\"" + (f.text.length > 80 ? f.text.slice(0, 78) + "…" : f.text) + "\"";
+function fbSetStatus(id, status) {
+  const f = S.feedback[id]; if (!f || !isLead()) return;
+  const note = ((document.getElementById("fbr-" + id) || {}).value || "").trim();
+  const say = { planned: "added your hub feedback to the next batch of updates", done: "marked your hub feedback as done", declined: "set your hub feedback aside for now", "new": "" }[status];
+  fbSave(f, { status, reply: note, replyBy: note ? S.me : (f.replyBy || ""), statusAt: nowStamp(), statusBy: S.me }, "Feedback moved to " + FB_STATUS[status],
+    { notify: say && f.by !== S.me ? [{ to: f.by, type: "feedback", taskId: "", text: S.me + " " + say + ": " + fbShort(f) + (note ? " (" + note + ")" : "") }] : [] });
+}
+function fbBatchText() {
+  const list = fbs().filter(f => fbStatus(f) === "planned").sort((a, b) => (b.votes || []).length - (a.votes || []).length || (+b.weight || 1) - (+a.weight || 1));
+  return "EECOH Team Hub: update batch, " + list.length + " item" + (list.length === 1 ? "" : "s") + " (copied " + fmt(REAL_TODAY) + ")\n\n" + list.map((f, i) =>
+    (i + 1) + ". [" + FB_KINDS[f.kind] + "] " + fbWhere(f) + " (" + (f.device || "") + ")\n   From " + f.by + ((f.votes || []).length ? ", +" + f.votes.length + " me too (" + f.votes.join(", ") + ")" : "") + ", " + FB_WEIGHT[+f.weight || 1].toLowerCase() + "\n   " + f.text.replace(/\n/g, "\n   ") + (f.reply ? "\n   Note from " + (f.replyBy || "lead") + ": " + f.reply : "")).join("\n\n");
+}
+async function fbCopy() {
+  const txt = fbBatchText();
+  try { await navigator.clipboard.writeText(txt); }
+  catch (e) { const ta = document.createElement("textarea"); ta.value = txt; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); } catch (e2) {} ta.remove(); }
+  toast("Batch copied. Paste it to Claude to build the updates.");
+}
+function fbBatchDone() {
+  const list = fbs().filter(f => fbStatus(f) === "planned"); if (!list.length || !isLead()) return;
+  const ch = list.map(f => ({ path: "feedback/" + f.id, before: before(S.feedback, f.id), after: stamp(Object.assign({}, f, { status: "done", statusAt: nowStamp(), statusBy: S.me })) }));
+  const per = {}; list.forEach(f => { if (f.by !== S.me) per[f.by] = (per[f.by] || 0) + 1; });
+  commit(ch, "Batch done: " + list.length + " feedback item" + (list.length === 1 ? "" : "s"), { skipGate: true, noUndo: true, notify: Object.keys(per).map(p => ({ to: p, type: "feedback", taskId: "", text: (per[p] === 1 ? "Your hub feedback note is" : per[p] + " of your hub feedback notes are") + " now live in the hub. Thank you. See the Feedback tab." })) });
+}
+function fbHTML(f) {
+  const votes = f.votes || [], mine = votes.includes(S.me), t = f.taskId && task(f.taskId), st = fbStatus(f), own = f.by === S.me;
+  return '<div class="fbcard"><div style="min-width:0"><div class="row small"><span class="pill ' + (FB_KIND_CLS[f.kind] || "") + '">' + esc(FB_KINDS[f.kind] || "Note") + "</span>" +
+    (st !== "new" ? '<span class="pill ' + (st === "done" ? "st-done" : st === "planned" ? "st-today" : "") + '">' + FB_STATUS[st] + "</span>" : "") +
+    (+f.weight > 1 ? '<span class="pill">' + FB_WEIGHT[+f.weight] + "</span>" : "") + '<span class="muted">' + esc(f.by === "Florencia" ? "Flor" : f.by) + " · " + esc(fmtTime(f.at)) + "</span></div>" +
+    '<div class="txt">' + esc(f.text) + '</div><div class="small muted">About ' + esc(fbWhere(f)) + (f.device ? ", on a " + esc(f.device) : "") + (t ? ' <button class="btn ghost sm" type="button" data-task="' + t.id + '">Open task</button>' : "") + "</div>" +
+    (f.reply && !isLead() ? '<div class="small" style="margin-top:6px"><b>' + esc(f.replyBy || "Reply") + ":</b> " + esc(f.reply) + "</div>" : "") +
+    (isLead() ? '<div class="resolve"><input id="fbr-' + f.id + '" value="' + esc(f.reply || "") + '" placeholder="Note back to ' + esc(f.by === "Florencia" ? "Flor" : f.by) + ' (optional)" aria-label="Note back"><select class="sel" data-fbstatus="' + f.id + '" aria-label="Status">' + Object.keys(FB_STATUS).map(k => '<option value="' + k + '"' + (k === st ? " selected" : "") + ">" + FB_STATUS[k] + "</option>").join("") + "</select></div>" : "") +
+    (own && st === "new" ? '<div style="margin-top:6px"><button class="btn sm ghost" type="button" data-fbdel="' + f.id + '">' + (S.confirmFbDel === f.id ? "Click again to delete" : "Delete") + "</button></div>" : "") + "</div>" +
+    '<button class="vote" type="button" data-fbvote="' + f.id + '" aria-pressed="' + mine + '"' + (own ? " disabled" : "") + ' aria-label="Me too"><span>▲</span><b>' + votes.length + '</b><span class="small">me too</span></button></div>';
+}
+function vFeedback() {
+  const all = fbs(), n = k => all.filter(f => fbStatus(f) === k).length, F = S.fbf;
+  const list = all.filter(f => F === "all" ? true : F === "closed" ? ["done", "declined"].includes(fbStatus(f)) : fbStatus(f) === F);
+  const areas = [...new Set(list.map(f => f.where || VIEW_NAME(f.view) || "The hub"))];
+  const body = !list.length ? '<div class="panel"><div class="empty">' + (F === "new" ? "No new feedback. Use the Feedback button at the bottom right of any screen." : "Nothing here.") + "</div></div>"
+    : (F === "closed" || F === "all") ? '<div class="panel">' + list.map(fbHTML).join("") + "</div>"
+    : areas.map((a, i) => '<div class="sec"' + (i ? "" : ' style="margin-top:0"') + ">" + esc(a) + '</div><div class="panel">' + list.filter(f => (f.where || VIEW_NAME(f.view) || "The hub") === a).sort((x, y) => (y.votes || []).length - (x.votes || []).length || (+y.weight || 1) - (+x.weight || 1)).map(fbHTML).join("") + "</div>").join("");
+  const seg = [["new", "New"], ["planned", "Next batch"], ["closed", "Closed"], ["all", "All"]].map(([k, l]) => '<button type="button" data-fbf="' + k + '" aria-pressed="' + (F === k) + '">' + l + (k === "new" || k === "planned" ? " " + n(k) : "") + "</button>").join("");
+  return '<div class="vhead"><div><h2>Hub feedback</h2><p>The Feedback button sits at the bottom right of every screen. Use it the moment something feels slow, confusing or great, and the hub notes where you were. Tap "me too" on a note you agree with instead of writing it again.</p></div>' +
+    '<div class="row"><div class="seg" role="group" aria-label="Show">' + seg + '</div><button class="btn pri" type="button" data-fbopen>+ Give feedback</button></div></div>' +
+    '<div class="grid2"><div>' + body + '</div><div><div class="panel pad"><h3 style="font-size:16px">How this works</h3><p class="small muted" style="margin:6px 0 0">1. Anyone sends a note from wherever they are working.<br>2. Arron and Lucia review the new notes together and move the ones to build into the next batch.<br>3. The batch gets built in one go, and you get a message when your note is live.</p></div>' +
+    (isLead() ? '<div class="panel pad" style="margin-top:12px"><h3 style="font-size:16px">Next batch</h3><p class="small muted" style="margin:6px 0 10px">' + (n("planned") ? n("planned") + " note" + (n("planned") === 1 ? "" : "s") + " ready to build. Copy the batch and paste it to Claude, then mark it done once the update is live." : "Set a note's status to Next batch to queue it. Nothing is queued yet.") + "</p>" +
+      '<div class="row"><button class="btn pri" type="button" data-fbcopy' + (n("planned") ? "" : " disabled") + '>Copy batch for Claude</button><button class="btn" type="button" data-fbbatchdone' + (n("planned") ? "" : " disabled") + ">" + (S.confirmFbBatch ? "Click again to confirm" : "Mark batch done") + "</button></div></div>" : "") + "</div></div>";
+}
+document.addEventListener("click", e => {
+  const q = s => e.target.closest(s); let x;
+  if (q("[data-fbopen]")) { openFeedback(); return; }
+  if (q("[data-fbclose]")) { closeFeedback(); return; }
+  if ((x = q("[data-fbf]"))) { S.fbf = x.dataset.fbf; S.confirmFbBatch = false; render(); return; }
+  if ((x = q("[data-fbvote]"))) { const f = S.feedback[x.dataset.fbvote]; if (!f || f.by === S.me) return; const v = (f.votes || []).slice(), k = v.indexOf(S.me); k < 0 ? v.push(S.me) : v.splice(k, 1); fbSave(f, { votes: v }, k < 0 ? "Added your me too" : "Removed your me too", { noUndo: true, toast: false }); return; }
+  if ((x = q("[data-fbdel]"))) { const id = x.dataset.fbdel; if (S.confirmFbDel !== id) { S.confirmFbDel = id; render(); return; } S.confirmFbDel = null; commit([{ path: "feedback/" + id, before: before(S.feedback, id), after: null }], "Deleted your feedback note", { skipGate: true, noLog: true }); return; }
+  if (q("[data-fbcopy]")) { fbCopy(); return; }
+  if (q("[data-fbbatchdone]")) { if (!S.confirmFbBatch) { S.confirmFbBatch = true; render(); return; } S.confirmFbBatch = false; fbBatchDone(); return; }
+});
+document.addEventListener("change", e => { if (e.target.matches("[data-fbstatus]")) fbSetStatus(e.target.dataset.fbstatus, e.target.value); });
+document.addEventListener("submit", e => {
+  if (e.target.id !== "fbForm") return; e.preventDefault();
+  const text = document.getElementById("fbText").value.trim(); if (!text) return;
+  const kind = (e.target.querySelector("input[name=fbKind]:checked") || {}).value || "idea", id = uid("fb");
+  const doc = Object.assign({ kind, text, weight: +document.getElementById("fbWeight").value || 1, by: S.me, at: new Date().toISOString(), status: "new", votes: [] }, S.fbCtx || fbContext());
+  closeFeedback();
+  commit([{ path: "feedback/" + id, before: null, after: doc }], "Thanks. Your feedback is saved.", { skipGate: true, noUndo: true, noLog: true, extra: '<button type="button" data-view="feedback">See all</button>' });
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape" && document.getElementById("fbRoot").innerHTML) { e.stopImmediatePropagation(); closeFeedback(); } }, true);
+
 /* ===================== render & routing ===================== */
 function renderTabs() {
   const late = tasks().filter(t => t.owner === S.me && state(t) === "late").length, un = unread().length;
@@ -1949,6 +2069,7 @@ function renderTabs() {
     if (v.id === "approvals") { const n = awaitingMe().length; if (n) b = '<span class="badge hot num">' + n + "</span>"; else if (pendingReqs().length) b = '<span class="badge num">' + pendingReqs().length + "</span>"; }
     if (v.id === "flags" && allFlags) b = '<span class="badge num">' + allFlags + "</span>";
     if (v.id === "ideas") { const n = Object.values(S.ideas).filter(i => i.status !== "Parked" && i.status !== "Scheduled").length; if (n) b = '<span class="badge num">' + n + "</span>"; }
+    if (v.id === "feedback" && isLead()) { const n = fbs().filter(f => (f.status || "new") === "new").length; if (n) b = '<span class="badge num">' + n + "</span>"; }
     return '<button class="tab" role="tab" type="button" data-view="' + v.id + '" aria-selected="' + (S.view === v.id) + '">' + v.name + b + "</button>";
   }).join("");
 }
@@ -1962,11 +2083,12 @@ function render() {
       : '<div class="panel empty">' + (S.slow ? "Still loading. Check your connection. Nothing you've saved is lost." : "Loading the team's tasks…") + "</div>";
     return;
   }
+  document.getElementById("fbBtn").hidden = false;
   const ae = document.activeElement, focusId = ae && ae.id, selStart = ae && ae.selectionStart;
   const draftVals = {}; document.querySelectorAll("#view textarea, #view input[type=text], #view input:not([type])").forEach(x => { if (x.id && x.value) draftVals[x.id] = x.value; });
   const gs = document.getElementById("gscroll"), sx = gs ? gs.scrollLeft : null, sy = gs ? gs.scrollTop : null;
   const cl = document.getElementById("chatlist"), atBottom = cl ? cl.scrollHeight - cl.scrollTop - cl.clientHeight < 40 : true;
-  el.innerHTML = S.view === "today" ? vToday() : S.view === "schedule" ? vSchedule() : S.view === "load" ? vLoad() : S.view === "board" ? vBoard() : S.view === "list" ? vList() : S.view === "messages" ? vMessages() : S.view === "flags" ? vFlags(lastFlagPref) : S.view === "ideas" ? vIdeas() : S.view === "hours" ? vHours() : S.view === "approvals" ? vApprovals() : vBackup();
+  el.innerHTML = S.view === "today" ? vToday() : S.view === "schedule" ? vSchedule() : S.view === "load" ? vLoad() : S.view === "board" ? vBoard() : S.view === "list" ? vList() : S.view === "messages" ? vMessages() : S.view === "flags" ? vFlags(lastFlagPref) : S.view === "ideas" ? vIdeas() : S.view === "hours" ? vHours() : S.view === "approvals" ? vApprovals() : S.view === "feedback" ? vFeedback() : vBackup();
   Object.keys(draftVals).forEach(k => { const x = document.getElementById(k); if (x && !x.value) x.value = draftVals[k]; });
   const g = document.getElementById("gscroll");
   if (g) { if (sx != null && S.lastView === "schedule") { g.scrollLeft = sx; g.scrollTop = sy; } else { const ti = dayRange().indexOf(TODAY); if (ti > 2) g.scrollLeft = (ti - 2) * S.dayW; } }
@@ -2280,7 +2402,7 @@ fromHash(); renderTabs();
     reRender();
     if (key === "tasks" && S.drawer && S.drawer !== "new" && !(document.activeElement && document.activeElement.closest && document.activeElement.closest(".drawer"))) openTask(S.drawer);
   }, e => { clearTimeout(slow); S.loaded.tasks = true; onErr(e); render(); });
-  sub("tasks", "tasks", true); sub("requests", "requests"); sub("milestones", "milestones"); sub("colors", "colors"); sub("ideas", "ideas"); sub("flags", "flags"); sub("people", "people"); sub("dates", "dates"); sub("meta", "meta");
+  sub("tasks", "tasks", true); sub("requests", "requests"); sub("milestones", "milestones"); sub("colors", "colors"); sub("ideas", "ideas"); sub("flags", "flags"); sub("people", "people"); sub("dates", "dates"); sub("meta", "meta"); sub("feedback", "feedback");
   db.collection("comments").orderBy("at", "desc").limit(600).onSnapshot(snap => {
     const next = {}; snap.docs.forEach(d => { next[d.id] = Object.assign({ id: d.id }, d.data()); }); S.comments = next; reRender();
     if (S.drawer && S.drawer !== "new" && !(document.activeElement && document.activeElement.closest && document.activeElement.closest(".drawer"))) openTask(S.drawer);
