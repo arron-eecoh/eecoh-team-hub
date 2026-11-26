@@ -201,6 +201,9 @@ form.add, .fgrid { display: grid; gap: 10px; }
 label.f { display: grid; gap: 4px; font-size: 12.5px; font-weight: 500; color: var(--muted); }
 label.f input, label.f textarea, label.f select { background: var(--surface2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: var(--ink); width: 100%; font-size: 14px; }
 label.f textarea { min-height: 70px; resize: vertical; }
+/* iPhone/iPad Safari draws date fields with no height and an empty value unless told otherwise */
+label.f input[type=date], label.f input[type=time] { -webkit-appearance: none; appearance: none; min-height: 38px; min-width: 0; display: block; }
+label.f input::-webkit-date-and-time-value { text-align: left; min-height: 1.3em; }
 .f2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .f3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 @media (max-width: 520px) { .f3 { grid-template-columns: minmax(0, 1fr); } }
@@ -1744,7 +1747,7 @@ async function startTimer(taskId, label) {
   try { await put("time/" + S.uid, { person: S.me, updatedAt: nowStamp() }); } catch (e) {}
   await commit([{ path: "time/" + S.uid + "/entries/" + eid, before: null, after: { person: S.me, by: S.me, task: what, taskId: t ? t.id : "", date: iso(d), start: nowHM(), finish: "", minutes: 0, client: (t && t.client) || "BM-26-000", workType: "Build", recurring: "One-off", notes: "", running: true, synced: "running", method: "timer", source: t ? "task" : "manual", startedAt: d.toISOString(), createdAt: d.toISOString() } }], "Timer started: " + what, { noLog: true, noUndo: true, skipGate: true });
   if (t && t.status === "Not started") saveTask(t.id, { status: "Working on it" }, "Started: " + t.item, { noUndo: true, toast: false });
-  if (S.drawer === taskId) openTask(taskId);
+  if (S.drawer === taskId && !S.drawerDirty) openTask(taskId);
 }
 function renderTimer() {
   const bar = document.getElementById("timerBar"), r = runningTimer(); if (!bar) return;
@@ -1777,7 +1780,7 @@ function openStopTimer() {
     const b = clone(r); delete b.id; delete b._path;
     const ok = await commit([{ path: r._path, before: b, after: en }], "Logged " + hm(mins) + " h: " + en.task, { noLog: true, noUndo: true, skipGate: true });
     if (ok && done && t) await commit([changeTask(t.id, { status: "Done" })], "Closed: " + t.item, { noUndo: true, toast: false });
-    if (S.drawer && S.drawer !== "new") openTask(S.drawer);
+    refreshDrawer();
   });
 }
 const methodName = e => e.method === "timer" ? "Timer" : e.method === "timer-fixed" ? "Timer, end typed" : "Typed in";
@@ -1827,7 +1830,7 @@ function vBackup() {
 function openTask(id, preset) {
   const isNew = !id; const t = isNew ? Object.assign({ item: "", owner: S.me, status: "Not started", prio: "Medium", start: TODAY, end: TODAY, hrs: 1, dep: "", notes: "", group: "", project: "", client: "", parent: "" }, preset || {}) : task(id);
   if (!t) return;
-  S.drawer = id || "new";
+  S.drawer = id || "new"; S.drawerDirty = false;
   const deps = isNew ? [] : tasks().filter(x => x.dep === t.id && !isDone(x));
   const b = t.dep && task(t.dep), ks = isNew ? [] : byOrder(kids(t.id)), par = t.parent && task(t.parent);
   const groups = [...new Set(tasks().map(x => x.group).filter(Boolean))].sort();
@@ -1864,7 +1867,9 @@ function openTask(id, preset) {
     (!isNew ? '<div class="dsec"><h3>Comments</h3><div class="thread">' + (thread.length ? thread.map(cmtHTML).join("") : '<p class="small muted" style="margin:0">No comments yet. Ask a question or share an update here, and tag whoever needs to see it.</p>') + "</div>" +
       '<div style="margin-top:10px">' + composer(t.id, "Comment on this task. @tag someone to email them.") + "</div></div>" : "") +
     "</aside>";
-  document.getElementById("taskForm").addEventListener("submit", e => {
+  const tf = document.getElementById("taskForm");
+  ["input", "change"].forEach(ev => tf.addEventListener(ev, () => { S.drawerDirty = true; }));
+  tf.addEventListener("submit", e => {
     e.preventDefault();
     const g = k => document.getElementById(k).value;
     let start = g("tStart"), end = g("tEnd");
@@ -1893,7 +1898,14 @@ function openTask(id, preset) {
   setTimeout(() => { const el = document.getElementById(isNew ? "tItem" : "tStatus"); if (el && isNew) el.focus(); }, 0);
   renderPresence(); updatePresence();
 }
-function closeDrawer() { const had = S.drawer; S.drawer = null; S.confirmDel = null; document.getElementById("drawerRoot").innerHTML = ""; if (had) updatePresence(); }
+/* Redraw the open task with fresh data, unless someone is typing in it or has unsaved edits (a redraw would wipe them). */
+function refreshDrawer() {
+  if (!S.drawer || S.drawer === "new") return;
+  const ae = document.activeElement;
+  if (S.drawerDirty || (ae && ae.closest && ae.closest(".drawer"))) return;
+  openTask(S.drawer);
+}
+function closeDrawer() { const had = S.drawer; S.drawer = null; S.drawerDirty = false; S.confirmDel = null; document.getElementById("drawerRoot").innerHTML = ""; if (had) updatePresence(); }
 
 /* ===================== close task + log time ===================== */
 function closeTask(id) {
@@ -2290,7 +2302,7 @@ function sendComment(target, ta) {
   const notes = ms.map(p => ({ to: p, type: "mention", taskId: t ? t.id : "", text: S.me + (t ? " on \"" + t.item + "\"" : " in team chat") + ": " + text }));
   if (t && t.owner && !ms.includes(t.owner)) notes.push({ to: t.owner, type: "comment", taskId: t.id, text: S.me + " commented on \"" + t.item + "\": " + text });
   ta.value = "";
-  commit([{ path: "comments/" + id, before: null, after: { target, by: S.me, text, at: new Date().toISOString(), mentions: ms } }], t ? "Commented on " + t.item : "Posted in team chat", { noUndo: true, toast: false, notify: notes }).then(ok => { if (ok && t && S.drawer === t.id) openTask(t.id); });
+  commit([{ path: "comments/" + id, before: null, after: { target, by: S.me, text, at: new Date().toISOString(), mentions: ms } }], t ? "Commented on " + t.item : "Posted in team chat", { noUndo: true, toast: false, notify: notes }).then(ok => { if (ok && t && S.drawer === t.id && !S.drawerDirty) openTask(t.id); });
 }
 
 /* ===================== events ===================== */
@@ -2564,12 +2576,12 @@ fromHash(); renderTabs();
     S[key] = next;
     if (first) { S.loaded.tasks = true; if (!snap.metadata.fromCache) { clearTimeout(slow); S.slow = false; setSync(S.readOnly ? "warn" : "live", S.readOnly ? "View only" : "Live"); } }
     reRender();
-    if (key === "tasks" && S.drawer && S.drawer !== "new" && !(document.activeElement && document.activeElement.closest && document.activeElement.closest(".drawer"))) openTask(S.drawer);
+    if (key === "tasks") refreshDrawer();
   }, e => { clearTimeout(slow); S.loaded.tasks = true; onErr(e); render(); });
   sub("tasks", "tasks", true); sub("requests", "requests"); sub("milestones", "milestones"); sub("colors", "colors"); sub("ideas", "ideas"); sub("flags", "flags"); sub("people", "people"); sub("dates", "dates"); sub("meta", "meta"); sub("feedback", "feedback");
   db.collection("comments").orderBy("at", "desc").limit(600).onSnapshot(snap => {
     const next = {}; snap.docs.forEach(d => { next[d.id] = Object.assign({ id: d.id }, d.data()); }); S.comments = next; reRender();
-    if (S.drawer && S.drawer !== "new" && !(document.activeElement && document.activeElement.closest && document.activeElement.closest(".drawer"))) openTask(S.drawer);
+    refreshDrawer();
   }, onErr);
   db.collection("notify").orderBy("at", "desc").limit(400).onSnapshot(snap => { const next = {}; snap.docs.forEach(d => { next[d.id] = Object.assign({ id: d.id }, d.data()); }); S.notify = next; reRender(); }, onErr);
   let logReady = false;
