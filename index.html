@@ -134,6 +134,8 @@ main { max-width: 1240px; margin: 0 auto; padding-left: max(16px, env(safe-area-
 .gbar.dragging { cursor: grabbing; box-shadow: 0 6px 16px rgba(0,0,0,.25); z-index: 4; }
 .gbar .rz { position: absolute; right: 0; top: 0; bottom: 0; width: 9px; cursor: ew-resize; background: rgba(255,255,255,.25); }
 .gbar.done { opacity: .35; }
+.gbar.hold { opacity: .45; background-image: repeating-linear-gradient(135deg, transparent 0 6px, rgba(255,255,255,.35) 6px 9px); }
+.pill.st-hold { background: var(--surface2); color: var(--muted); border: 1px dashed var(--line); }
 .gbar.late { box-shadow: 0 0 0 2px var(--bad); }
 .b-Florencia { background: var(--p-flo); } .b-Lucia { background: var(--p-lucia); } .b-Luciana { background: var(--p-luciana); } .b-Arron { background: var(--p-arron); } .b-Toassign { background: var(--p-none); }
 .gline { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); z-index: 1; pointer-events: none; }
@@ -551,11 +553,26 @@ const tasks = () => Object.values(S.tasks);
 const task = id => S.tasks[id];
 const isDone = t => t.status === "Done";
 const clients = () => (S.meta.clients && S.meta.clients.list && S.meta.clients.list.length) ? S.meta.clients.list : DEFAULT_CLIENTS;
+/* Projects on hold: stored in meta/projects.hold (a list of client ids). Until that doc exists, IGPCo. starts on hold.
+   Tasks in an on-hold project keep their dates and data but are not overdue, raise no flags and add nothing to daily load. */
+const DEFAULT_HOLD = ["IGPCo."];
+const holdIds = () => (S.meta.projects && Array.isArray(S.meta.projects.hold)) ? S.meta.projects.hold : DEFAULT_HOLD;
+const isHeld = cid => !!cid && holdIds().includes(cid);
+const onHold = t => !!t && !isDone(t) && isHeld(t.client);
+const canHold = () => S.me === "Arron" || S.me === "Lucia";
+function setHold(cid, hold) {
+  if (!cid || !canHold()) return;
+  const cur = holdIds().filter(x => x !== cid), next = hold ? cur.concat(cid) : cur;
+  const n = tasks().filter(t => t.client === cid && !isDone(t)).length;
+  /* project status only: no task dates change, so this skips the date approval rules */
+  commit([{ path: "meta/projects", before: before(S.meta, "projects"), after: stamp({ hold: next }) }], (hold ? "Put project on hold: " : "Resumed project: ") + cid, { skipGate: true, details: n + " open task" + (n === 1 ? "" : "s") });
+}
 const clientName = id => { const c = clients().find(x => x.id === id); return c ? c.name : (id || ""); };
 const initials = n => (n || "?").slice(0, 1).toUpperCase();
 const nextFriday = from => { const d = pd(from); const add = (5 - d.getDay() + 7) % 7; d.setDate(d.getDate() + add); return iso(d); };
 function state(t) {
   if (isDone(t)) return "done";
+  if (onHold(t)) return "hold";
   if (!t.end) return "open";
   if (t.end < TODAY) return "late";
   if (t.end === TODAY) return "today";
@@ -572,6 +589,7 @@ function statusPills(t) {
   if (t.status === "Working on it") out += '<span class="pill st-prog">In progress</span>';
   if (t.status === "Waiting on Arron") out += '<span class="pill st-wait">Waiting on Arron</span>';
   const st = state(t);
+  if (st === "hold") out += '<span class="pill st-hold">Project on hold</span>';
   if (st === "late") out += '<span class="pill st-late">Overdue</span>';
   if (st === "today") out += '<span class="pill st-today">Due today</span>';
   if (blocker(t) && t.start && t.start <= TODAY) out += '<span class="pill st-block">Blocked</span>';
@@ -582,7 +600,7 @@ const cap = p => { const v = S.people[p] && S.people[p].cap; return v === "" || 
 const emailOf = p => (S.people[p] && S.people[p].email) || "";
 function uid(prefix) { return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
 function opts(list, cur) { return list.map(v => '<option value="' + esc(v) + '"' + (v === cur ? " selected" : "") + ">" + esc(v) + "</option>").join(""); }
-function clientOpts(cur, withAll) { return (withAll ? '<option value="All"' + (cur === "All" ? " selected" : "") + ">All clients</option>" : '<option value="">No client</option>') + clients().map(c => '<option value="' + esc(c.id) + '"' + (c.id === cur ? " selected" : "") + ">" + esc(c.name) + "</option>").join(""); }
+function clientOpts(cur, withAll) { return (withAll ? '<option value="All"' + (cur === "All" ? " selected" : "") + ">All clients</option>" : '<option value="">No client</option>') + clients().map(c => '<option value="' + esc(c.id) + '"' + (c.id === cur ? " selected" : "") + ">" + esc(c.name) + (isHeld(c.id) ? " (on hold)" : "") + "</option>").join(""); }
 const groupName = g => (g || "Other").replace(/^\d+\.\s*/, "");
 const commentsOn = target => Object.values(S.comments).filter(c => c.target === target).sort((a, b) => (a.at || "").localeCompare(b.at || ""));
 const cCount = id => Object.values(S.comments).filter(c => c.target === id).length;
@@ -610,6 +628,8 @@ function filterBar(opts2) {
     '<select class="sel" id="fGroup" aria-label="Group"><option value="All">All groups</option>' + groups.map(g => '<option value="' + esc(g) + '"' + (g === S.f.group ? " selected" : "") + ">" + esc(groupName(g)) + "</option>").join("") + "</select>" +
     (opts2.hideDone ? '<label class="tg"><input type="checkbox" id="fHide"' + (S.f.hideDone ? " checked" : "") + "> Hide done</label>" : "") +
     ((S.f.owner !== "All" || S.f.client !== "All" || S.f.group !== "All" || S.f.q) ? '<button class="btn sm ghost" type="button" data-fclear>Clear filters</button>' : "") +
+    (S.f.client !== "All" && S.f.client && canHold() ? '<button class="btn sm' + (isHeld(S.f.client) ? " pri" : "") + '" type="button" data-hold="' + esc(S.f.client) + '" data-on="' + (isHeld(S.f.client) ? "0" : "1") + '">' + (isHeld(S.f.client) ? "Resume project" : "Put project on hold") + "</button>" : "") +
+    (S.f.client !== "All" && isHeld(S.f.client) ? '<span class="pill st-hold">On hold</span>' : "") +
     (opts2.extra || "") + "</div>";
 }
 
@@ -626,14 +646,14 @@ function dayRange(list) {
 function loadMap(days) {
   const m = {}; OWNERS.forEach(o => { m[o] = {}; days.forEach(d => m[o][d] = 0); });
   tasks().forEach(t => {
-    if (isDone(t) || !t.start || !m[t.owner] || kids(t.id).length) return;
+    if (isDone(t) || onHold(t) || !t.start || !m[t.owner] || kids(t.id).length) return;
     let ds = workdays(t.start, t.end).filter(d => d >= TODAY);
     if (!ds.length) ds = [TODAY];
     ds.forEach(d => { if (m[t.owner][d] != null) m[t.owner][d] += (+t.hrs || 0) / ds.length; });
   });
   return m;
 }
-function tasksOn(person, day) { return tasks().filter(t => t.owner === person && !isDone(t) && t.start && (workdays(t.start, t.end).includes(day) || (t.end < TODAY && day === TODAY))); }
+function tasksOn(person, day) { return tasks().filter(t => t.owner === person && !isDone(t) && !onHold(t) && t.start && (workdays(t.start, t.end).includes(day) || (t.end < TODAY && day === TODAY))); }
 function nextOpenDay(person, hrs, from) {
   const c = cap(person); let d = addWork(from, 0);
   const days = workdays(d, addWork(d, 30)); const m = loadMap(days);
@@ -772,7 +792,7 @@ function chainChanges(id, override) {
   const visit = (pid, depth) => {
     if (depth > 30) return;
     const p = get(pid);
-    tasks().filter(t => t.dep === pid && !isDone(t) && t.start).forEach(t => {
+    tasks().filter(t => t.dep === pid && !isDone(t) && !onHold(t) && t.start).forEach(t => {
       const c = get(t.id);
       if (c.start > p.end) return;
       const ns = addWork(p.end, 1), ne = addWork(ns, span(c) - 1);
@@ -801,7 +821,7 @@ function moveToDay(id, day, label) {
 /* a task is out of sequence when it starts before the last day of the task it comes after (a same-day handoff is fine) */
 function seqIssue(t) {
   const p = t && t.dep && task(t.dep);
-  return p && !isDone(p) && !isDone(t) && p.end && t.start && t.start < p.end ? p : null;
+  return p && !isDone(p) && !isDone(t) && !onHold(t) && p.end && t.start && t.start < p.end ? p : null;
 }
 const oosList = () => tasks().map(t => ({ t, p: seqIssue(t) })).filter(x => x.p);
 function wouldCycle(from, to) { let c = from, n = 0; while (c && n++ < 60) { if (c === to) return true; const k = task(c); c = k && k.dep; } return false; }
@@ -1219,7 +1239,7 @@ function msOverview() {
 function autoFlags() {
   const out = [];
   tasks().forEach(t => {
-    if (isDone(t)) return;
+    if (isDone(t) || onHold(t)) return;
     if (state(t) === "late") out.push({ key: "late-" + t.id, kind: "overdue", task: t, who: t.owner, msg: "Past its end date (" + fmt(t.end) + ") and still open." });
     const b = blocker(t), sq = seqIssue(t);
     if (sq) out.push({ key: "seq-" + t.id, kind: "sequence", task: t, who: t.owner, dep: sq, msg: "Out of sequence: starts " + fmt(t.start) + " but \"" + sq.item + "\" (" + sq.owner + ") isn't due until " + fmt(sq.end) + "." });
@@ -1344,7 +1364,7 @@ const VIEWS = [
 ];
 
 function vToday() {
-  const v = S.me, mine = tasks().filter(t => t.owner === v && !isDone(t) && !kids(t.id).length);
+  const v = S.me, mineAll = tasks().filter(t => t.owner === v && !isDone(t) && !kids(t.id).length), mine = mineAll.filter(t => !onHold(t)), held = mineAll.length - mine.length;
   const late = sortT(mine.filter(t => state(t) === "late")), today = sortT(mine.filter(t => state(t) === "today"));
   const week = sortT(mine.filter(t => t.end && t.end > TODAY && t.end <= addWork(TODAY, 4)));
   const waiting = sortT(mine.filter(t => { const b = blocker(t); return b && b.owner !== v; }));
@@ -1357,7 +1377,7 @@ function vToday() {
   return '<div class="vhead"><div><h2>' + (v === "Arron" ? "Morning, Arron" : "Hi " + esc(v)) + "</h2><p>" + fmt(REAL_TODAY, true) + ". Tick a task to close it and log its time. Everything saves for the whole team.</p></div>" +
     '<div class="row"><span class="small muted">Due by</span><button class="btn sm" type="button" data-dueby="' + TODAY + '">Today</button><button class="btn sm" type="button" data-dueby="' + fri + '">' + fmt(fri, true) + '</button><button class="btn sm" type="button" data-dueby="' + nfri + '">' + fmt(nfri, true) + "</button></div></div>" +
     '<div class="kpis">' +
-      '<div class="panel kpi"><b class="num">' + mine.length + "</b><span>Open tasks for you</span></div>" +
+      '<div class="panel kpi"><b class="num">' + mine.length + "</b><span>Open tasks for you" + (held ? " (" + held + " more paused: project on hold)" : "") + "</span></div>" +
       '<div class="panel kpi"><b class="num" style="color:var(--bad)">' + late.length + "</b><span>Your overdue tasks</span></div>" +
       '<div class="panel kpi"><b class="num">' + un.length + "</b><span>Unread messages</span></div>" +
       '<div class="panel kpi"><b class="num">' + (c ? fmtH(hToday) + " / " + fmtH(c) + " h" : fmtH(hToday) + " h") + '</b><span>Your load today</span><div class="meter"><i style="width:' + pct + "%;background:" + color + '"></i></div></div>' +
@@ -1399,7 +1419,7 @@ function vGantt() {
     const sc = S.colorBy === "project" ? (PTOKEN[t.owner] ? "var(--p-" + PTOKEN[t.owner] + ")" : "var(--p-none)") : t.client ? "var(--" + ckey(t.client) + ")" : "";
     const critC = S.crit ? (crit.ids.has(t.id) ? " crit" : " dim") : "";
     const glyph = t.status === "Waiting on Arron" ? "⏸ " : t.status === "Working on it" ? "▶ " : "";
-    return '<div role="button" tabindex="0" data-bar="' + t.id + '" class="gbar ' + fill + (sc ? " stripe" : "") + critC + (sub ? " gsub" : "") + (st === "done" ? " done" : "") + (st === "late" ? " late" : "") + (oos ? " oos" : "") + (S.linkFrom === t.id ? " linksrc" : "") + '" style="left:' + L + "px;width:" + W + "px" + (sc ? ";--sc:" + sc : "") + '" aria-label="' + esc(t.item) + ", " + esc(t.owner) + ", " + (t.client ? esc(t.client) + ", " : "") + esc(t.prio || "Medium") + " priority, " + fmt(t.start) + " to " + fmt(t.end) + (S.crit && crit.ids.has(t.id) ? ", on the critical path" : "") + (oos ? ". Out of sequence with " + esc(oos.item) : "") + '. Drag to move, arrow keys to shift a day.">' +
+    return '<div role="button" tabindex="0" data-bar="' + t.id + '" class="gbar ' + fill + (sc ? " stripe" : "") + critC + (sub ? " gsub" : "") + (st === "done" ? " done" : "") + (st === "late" ? " late" : "") + (st === "hold" ? " hold" : "") + (oos ? " oos" : "") + (S.linkFrom === t.id ? " linksrc" : "") + '" style="left:' + L + "px;width:" + W + "px" + (sc ? ";--sc:" + sc : "") + '" aria-label="' + esc(t.item) + ", " + esc(t.owner) + ", " + (t.client ? esc(t.client) + ", " : "") + esc(t.prio || "Medium") + " priority, " + fmt(t.start) + " to " + fmt(t.end) + (S.crit && crit.ids.has(t.id) ? ", on the critical path" : "") + (oos ? ". Out of sequence with " + esc(oos.item) : "") + '. Drag to move, arrow keys to shift a day.">' +
       '<span class="gt">' + (oos ? "⚠ " : "") + glyph + esc(t.item) + '</span><span class="rz" data-rz="' + t.id + '" aria-hidden="true"></span></div>' +
       '<button type="button" class="gdot' + (S.linkFrom === t.id ? " on" : "") + '" data-link="' + t.id + '" style="left:' + (L + W + 2) + 'px" aria-label="Link ' + esc(t.item) + ' to the task that comes after it" title="Drag onto the task that comes next, or onto a milestone diamond. Or tap here, then tap it."></button>';
   };
@@ -2163,16 +2183,20 @@ function fbSetStatus(id, status) {
   fbSave(f, { status, reply: note, replyBy: note ? S.me : (f.replyBy || ""), statusAt: nowStamp(), statusBy: S.me }, "Feedback moved to " + FB_STATUS[status],
     { notify: say && f.by !== S.me ? [{ to: f.by, type: "feedback", taskId: "", text: S.me + " " + say + ": " + fbShort(f) + (note ? " (" + note + ")" : "") }] : [] });
 }
+/* All pending feedback (Next batch first, then New, not yet reviewed), as plain text to paste into Claude */
 function fbBatchText() {
-  const list = fbs().filter(f => fbStatus(f) === "planned").sort((a, b) => (b.votes || []).length - (a.votes || []).length || (+b.weight || 1) - (+a.weight || 1));
-  return "EECOH Team Hub: update batch, " + list.length + " item" + (list.length === 1 ? "" : "s") + " (copied " + fmt(REAL_TODAY) + ")\n\n" + list.map((f, i) =>
-    (i + 1) + ". [" + FB_KINDS[f.kind] + "] " + fbWhere(f) + " (" + (f.device || "") + ")\n   From " + f.by + ((f.votes || []).length ? ", +" + f.votes.length + " me too (" + f.votes.join(", ") + ")" : "") + ", " + FB_WEIGHT[+f.weight || 1].toLowerCase() + "\n   " + f.text.replace(/\n/g, "\n   ") + (f.reply ? "\n   Note from " + (f.replyBy || "lead") + ": " + f.reply : "")).join("\n\n");
+  const rank = (a, b) => (b.votes || []).length - (a.votes || []).length || (+b.weight || 1) - (+a.weight || 1);
+  const line = (f, i) => (i + 1) + ". [" + (FB_KINDS[f.kind] || "Note") + "] " + fbWhere(f) + " (" + (f.device || "") + ")\n   From " + f.by + ((f.votes || []).length ? ", +" + f.votes.length + " me too (" + f.votes.join(", ") + ")" : "") + ", " + (FB_WEIGHT[+f.weight || 1] || "").toLowerCase() + "\n   " + String(f.text || "").replace(/\n/g, "\n   ") + (f.reply ? "\n   Note from " + (f.replyBy || "lead") + ": " + f.reply : "");
+  const planned = fbs().filter(f => fbStatus(f) === "planned").sort(rank), fresh = fbs().filter(f => fbStatus(f) === "new").sort(rank), total = planned.length + fresh.length;
+  const part = (title, l) => l.length ? "== " + title + " (" + l.length + ") ==\n\n" + l.map(line).join("\n\n") : "";
+  return "EECOH Team Hub: pending feedback, " + total + " item" + (total === 1 ? "" : "s") + " (copied " + fmt(REAL_TODAY) + ")\n\n" +
+    [part("Next batch", planned), part("New, not yet reviewed", fresh)].filter(Boolean).join("\n\n");
 }
 async function fbCopy() {
   const txt = fbBatchText();
   try { await navigator.clipboard.writeText(txt); }
   catch (e) { const ta = document.createElement("textarea"); ta.value = txt; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); } catch (e2) {} ta.remove(); }
-  toast("Batch copied. Paste it to Claude to build the updates.");
+  toast("Pending feedback copied. Paste it to Claude to build the updates.");
 }
 function fbBatchDone() {
   const list = fbs().filter(f => fbStatus(f) === "planned"); if (!list.length || !isLead()) return;
@@ -2192,7 +2216,7 @@ function fbHTML(f) {
     '<button class="vote" type="button" data-fbvote="' + f.id + '" aria-pressed="' + mine + '"' + (own ? " disabled" : "") + ' aria-label="Me too"><span>▲</span><b>' + votes.length + '</b><span class="small">me too</span></button></div>';
 }
 function vFeedback() {
-  const all = fbs(), n = k => all.filter(f => fbStatus(f) === k).length, F = S.fbf;
+  const all = fbs(), n = k => all.filter(f => fbStatus(f) === k).length, F = S.fbf, pend = n("new") + n("planned");
   const list = all.filter(f => F === "all" ? true : F === "closed" ? ["done", "declined"].includes(fbStatus(f)) : fbStatus(f) === F);
   const areas = [...new Set(list.map(f => f.where || VIEW_NAME(f.view) || "The hub"))];
   const body = !list.length ? '<div class="panel"><div class="empty">' + (F === "new" ? "No new feedback. Use the Feedback button at the bottom right of any screen." : "Nothing here.") + "</div></div>"
@@ -2202,8 +2226,8 @@ function vFeedback() {
   return '<div class="vhead"><div><h2>Hub feedback</h2><p>The Feedback button sits at the bottom right of every screen. Use it the moment something feels slow, confusing or great, and the hub notes where you were. Tap "me too" on a note you agree with instead of writing it again.</p></div>' +
     '<div class="row"><div class="seg" role="group" aria-label="Show">' + seg + '</div><button class="btn pri" type="button" data-fbopen>+ Give feedback</button></div></div>' +
     '<div class="grid2"><div>' + body + '</div><div><div class="panel pad"><h3 style="font-size:16px">How this works</h3><p class="small muted" style="margin:6px 0 0">1. Anyone sends a note from wherever they are working.<br>2. Arron and Lucia review the new notes together and move the ones to build into the next batch.<br>3. The batch gets built in one go, and you get a message when your note is live.</p></div>' +
-    (isLead() ? '<div class="panel pad" style="margin-top:12px"><h3 style="font-size:16px">Next batch</h3><p class="small muted" style="margin:6px 0 10px">' + (n("planned") ? n("planned") + " note" + (n("planned") === 1 ? "" : "s") + " ready to build. Copy the batch and paste it to Claude, then mark it done once the update is live." : "Set a note's status to Next batch to queue it. Nothing is queued yet.") + "</p>" +
-      '<div class="row"><button class="btn pri" type="button" data-fbcopy' + (n("planned") ? "" : " disabled") + '>Copy batch for Claude</button><button class="btn" type="button" data-fbbatchdone' + (n("planned") ? "" : " disabled") + ">" + (S.confirmFbBatch ? "Click again to confirm" : "Mark batch done") + "</button></div></div>" : "") + "</div></div>";
+    (isLead() ? '<div class="panel pad" style="margin-top:12px"><h3 style="font-size:16px">Next batch</h3><p class="small muted" style="margin:6px 0 10px">' + (pend ? n("planned") + " in the next batch and " + n("new") + " new. Copy for Claude copies all " + pend + " pending notes as text to paste into Claude. Mark the batch done once the update is live." : "No pending feedback right now.") + "</p>" +
+      '<div class="row"><button class="btn pri" type="button" data-fbcopy' + (pend ? "" : " disabled") + '>Copy batch for Claude</button><button class="btn" type="button" data-fbbatchdone' + (n("planned") ? "" : " disabled") + ">" + (S.confirmFbBatch ? "Click again to confirm" : "Mark batch done") + "</button></div></div>" : "") + "</div></div>";
 }
 document.addEventListener("click", e => {
   const q = s => e.target.closest(s); let x;
@@ -2360,6 +2384,7 @@ document.addEventListener("click", e => {
   if ((x = q("[data-view]"))) { go(x.dataset.view); return; }
   if ((x = q("[data-newtask]"))) { openTask(null, { client: S.f.client !== "All" ? S.f.client : "", group: S.f.group !== "All" ? S.f.group : "" }); return; }
   if ((x = q("[data-tick]"))) { closeDrawer(); toggleTick(x.dataset.tick); return; }
+  if ((x = q("[data-hold]"))) { setHold(x.dataset.hold, x.dataset.on === "1"); return; }
   if ((x = q("[data-shift]"))) { shiftTask(x.dataset.shift, +x.dataset.n); if (S.drawer === x.dataset.shift) setTimeout(() => openTask(x.dataset.shift), 0); return; }
   if ((x = q("[data-moveday]"))) { closeModal(); moveToDay(x.dataset.moveday, x.dataset.day); return; }
   if ((x = q("[data-nudge]"))) { nudge(x.dataset.nudge, x.dataset.waiting); return; }
