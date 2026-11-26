@@ -2153,6 +2153,7 @@ const FB_KIND_CLS = { like: "st-done", dislike: "st-wait", idea: "st-prog", bug:
 const FB_STATUS = { "new": "New", planned: "Next batch", done: "Done", declined: "Not now" };
 const FB_WEIGHT = { 1: "Nice to have", 2: "Would help a lot", 3: "Slows my work down" };
 const isLead = () => LEADS.includes(S.me);
+const canCopyFb = () => isLead() || S.me === "Florencia";
 const fbs = () => Object.values(S.feedback || {}).sort((a, b) => (b.at || "").localeCompare(a.at || ""));
 const fbStatus = f => FB_STATUS[f.status] ? f.status : "new";
 function fbContext() {
@@ -2226,8 +2227,8 @@ function vFeedback() {
   return '<div class="vhead"><div><h2>Hub feedback</h2><p>The Feedback button sits at the bottom right of every screen. Use it the moment something feels slow, confusing or great, and the hub notes where you were. Tap "me too" on a note you agree with instead of writing it again.</p></div>' +
     '<div class="row"><div class="seg" role="group" aria-label="Show">' + seg + '</div><button class="btn pri" type="button" data-fbopen>+ Give feedback</button></div></div>' +
     '<div class="grid2"><div>' + body + '</div><div><div class="panel pad"><h3 style="font-size:16px">How this works</h3><p class="small muted" style="margin:6px 0 0">1. Anyone sends a note from wherever they are working.<br>2. Arron and Lucia review the new notes together and move the ones to build into the next batch.<br>3. The batch gets built in one go, and you get a message when your note is live.</p></div>' +
-    (isLead() ? '<div class="panel pad" style="margin-top:12px"><h3 style="font-size:16px">Next batch</h3><p class="small muted" style="margin:6px 0 10px">' + (pend ? n("planned") + " in the next batch and " + n("new") + " new. Copy for Claude copies all " + pend + " pending notes as text to paste into Claude. Mark the batch done once the update is live." : "No pending feedback right now.") + "</p>" +
-      '<div class="row"><button class="btn pri" type="button" data-fbcopy' + (pend ? "" : " disabled") + '>Copy batch for Claude</button><button class="btn" type="button" data-fbbatchdone' + (n("planned") ? "" : " disabled") + ">" + (S.confirmFbBatch ? "Click again to confirm" : "Mark batch done") + "</button></div></div>" : "") + "</div></div>";
+    (canCopyFb() ? '<div class="panel pad" style="margin-top:12px"><h3 style="font-size:16px">Next batch</h3><p class="small muted" style="margin:6px 0 10px">' + (pend ? n("planned") + " in the next batch and " + n("new") + " new. Copy for Claude copies all " + pend + " pending notes as text to paste into Claude." + (isLead() ? " Mark the batch done once the update is live." : "") : "No pending feedback right now.") + "</p>" +
+      '<div class="row"><button class="btn pri" type="button" data-fbcopy' + (pend ? "" : " disabled") + '>Copy batch for Claude</button>' + (isLead() ? '<button class="btn" type="button" data-fbbatchdone' + (n("planned") ? "" : " disabled") + ">" + (S.confirmFbBatch ? "Click again to confirm" : "Mark batch done") + "</button>" : "") + "</div></div>" : "") + "</div></div>";
 }
 document.addEventListener("click", e => {
   const q = s => e.target.closest(s); let x;
@@ -2236,7 +2237,7 @@ document.addEventListener("click", e => {
   if ((x = q("[data-fbf]"))) { S.fbf = x.dataset.fbf; S.confirmFbBatch = false; render(); return; }
   if ((x = q("[data-fbvote]"))) { const f = S.feedback[x.dataset.fbvote]; if (!f || f.by === S.me) return; const v = (f.votes || []).slice(), k = v.indexOf(S.me); k < 0 ? v.push(S.me) : v.splice(k, 1); fbSave(f, { votes: v }, k < 0 ? "Added your me too" : "Removed your me too", { noUndo: true, toast: false }); return; }
   if ((x = q("[data-fbdel]"))) { const id = x.dataset.fbdel; if (S.confirmFbDel !== id) { S.confirmFbDel = id; render(); return; } S.confirmFbDel = null; commit([{ path: "feedback/" + id, before: before(S.feedback, id), after: null }], "Deleted your feedback note", { skipGate: true, noLog: true }); return; }
-  if (q("[data-fbcopy]")) { fbCopy(); return; }
+  if (q("[data-fbcopy]")) { if (canCopyFb()) fbCopy(); return; }
   if (q("[data-fbbatchdone]")) { if (!S.confirmFbBatch) { S.confirmFbBatch = true; render(); return; } S.confirmFbBatch = false; fbBatchDone(); return; }
 });
 document.addEventListener("change", e => { if (e.target.matches("[data-fbstatus]")) fbSetStatus(e.target.dataset.fbstatus, e.target.value); });
